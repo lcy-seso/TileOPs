@@ -5,8 +5,7 @@ Items marked **[RECOMMENDED]** should pass — note in PR body if skipped with r
 
 ## Correctness & Safety
 
-- [ ] **[REQUIRED]** `Op.forward` validates input dtype against `SUPPORTED_DTYPES` and raises `ValueError` for unsupported types — never let invalid dtypes reach the backend
-- [ ] **[REQUIRED]** `Op.forward` validates input shape/numel matches the compiled kernel — prevents OOB GPU memory access
+- [ ] **[REQUIRED]** `Kernel.__init__` validates dtype against `SUPPORTED_DTYPES` and raises `ValueError` for unsupported types — template kernels (`UnaryKernel`, `BinaryKernel`, `FusedGatedKernel`) inherit this from their base class; independent kernels that inherit from `Kernel` ABC directly must add validation explicitly
 - [ ] **[REQUIRED]** No hardcoded narrow-type constants in kernels (e.g. `T.cast(1.0, "float16")`) — use `x.dtype` or an explicit wide intermediate type
 - [ ] **[REQUIRED]** fp16/bf16 intermediate math that can overflow (cubic terms, division, exp) is promoted to fp32
 - [ ] **[REQUIRED]** Runtime validation uses `ValueError`/`TypeError`, never `assert` (stripped under `python -O`)
@@ -14,7 +13,7 @@ Items marked **[RECOMMENDED]** should pass — note in PR body if skipped with r
 
 ## Kernel Structure
 
-- [ ] **[REQUIRED]** `with T.Kernel()` is inside `@T.macro`, never directly in `@T.prim_func`
+- [ ] **[REQUIRED]** `with T.Kernel()` is inside `@T.prim_func`; complex kernels factor reusable sub-routines into `@T.macro` helpers called from within the `T.Kernel` scope
 - [ ] **[REQUIRED]** `Kernel.forward` accepts only GPU tensors and only calls `self.kernel(config...)(tensors)` — no format conversion, batching, or dtype cast
 - [ ] **[RECOMMENDED]** `_<op_name>_kernel(static_params) -> Callable` closure function exists
 - [ ] **[RECOMMENDED]** `@tilelang.jit(out_idx=[...])` wraps a config-parameterised inner function
@@ -23,12 +22,12 @@ Items marked **[RECOMMENDED]** should pass — note in PR body if skipped with r
 
 ## Op Structure
 
-- [ ] **[REQUIRED]** `Op.forward` owns all pre/post-processing; delegates GPU work to `self.kernel(...)` only
+- [ ] **[REQUIRED]** `Op.forward` owns all pre/post-processing (reshape, contiguous, dtype cast); delegates GPU work to `self.kernel(...)` only
 - [ ] **[REQUIRED]** `@torch.library.custom_op` + `.register_fake` wrapper exists for torch.compile compatibility
-- [ ] **[RECOMMENDED]** `default_config` and `autotune_configs` properties are defined
-- [ ] **[RECOMMENDED]** `supported_archs` class attribute is set
+- [ ] **[RECOMMENDED]** `default_config` and `autotune_configs` properties are defined on the Kernel class
+- [ ] **[RECOMMENDED]** `supported_archs` class attribute is set on the Kernel class
 - [ ] **[RECOMMENDED]** `accum_dtype` is hardcoded in kernel — never a property, config key, or parameter
-- [ ] **[RECOMMENDED]** `__init__` signature ends with `kernel_map=None, tune=False`; `dispatch_kernel(kernel_map)` called before kernel use
+- [ ] **[RECOMMENDED]** Template-based Ops: `__init__` signature ends with `kernel_map=None, tune=False`; `dispatch_kernel(kernel_map)` called before kernel use. Independent Ops: `Kernel.__init__` signature ends with `config=None, tune=False`
 
 ## Delivery
 
