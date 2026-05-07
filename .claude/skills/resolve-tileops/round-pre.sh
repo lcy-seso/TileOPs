@@ -21,8 +21,8 @@ PR="${1:?usage: round-pre.sh <PR_NUMBER>}"
 command -v gh >/dev/null 2>&1 || { echo "round-pre: missing gh" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "round-pre: missing jq" >&2; exit 1; }
 
-REPO="tile-ai/TileOPs"
 REVIEWER_LOGIN="${RESOLVE_REVIEWER_LOGIN:-Ibuki-wind}"
+SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Anchor state lookup to the main checkout (see preflight.sh).
 REPO_PATH="$(git worktree list --porcelain 2>/dev/null | head -n 1 | sed 's/^worktree //')" \
   || { echo "round-pre: not in a git repo" >&2; exit 1; }
@@ -54,10 +54,27 @@ LAST_REVIEW_COMMENT_ID_PREV=$(jq -r '.last_processed_review_comment_id' "$META")
 CONSECUTIVE_IDLE=$(jq -r '.consecutive_idle // 0' "$META")
 MAX_IDLE=20
 
-PR_JSON=$(gh pr view "$PR" --repo "$REPO" --json state,headRefOid,isDraft 2>/dev/null) \
+# Pin `gh pr view` to the repo recorded in meta.json. Preflight already
+# stamped this to the canonical base repo; without `--repo`, gh defaults
+# to the worktree's origin remote, which in a fork checkout points at
+# the contributor's fork and either fails or fetches the wrong PR.
+META_REPO=$(jq -r '.repo // empty' "$META")
+[[ -n "$META_REPO" ]] \
+  || { echo "round-pre: meta.json missing .repo — re-run preflight.sh" >&2; exit 1; }
+PR_JSON=$(gh pr view "$PR" --repo "$META_REPO" --json state,headRefOid,isDraft,baseRepository 2>/dev/null) \
   || { echo "round-pre: gh pr view failed" >&2; exit 1; }
 PR_STATE=$(echo "$PR_JSON" | jq -r .state)
 HEAD_SHA=$(echo "$PR_JSON" | jq -r .headRefOid)
+# `gh pr view --json baseRepository` returns owner as an object
+# `{login: "..."}`, not a bare string. Extract `.login` strictly; if it's
+# absent we cannot construct a valid owner/name pair, so fail rather than
+# stringify the object.
+REPO_OWNER=$(echo "$PR_JSON" | jq -r '.baseRepository.owner.login // empty')
+REPO_NAME=$(echo "$PR_JSON" | jq -r '.baseRepository.name // empty')
+if [[ -z "$REPO_OWNER" || -z "$REPO_NAME" ]]; then
+  echo "round-pre: could not derive base repo from gh pr view (need .baseRepository.owner.login and .baseRepository.name)" >&2; exit 1
+fi
+REPO="$REPO_OWNER/$REPO_NAME"
 
 # Reviews + inline comments — paginate so PRs with >1 page don't
 # silently lose the latest IDs / state.
@@ -88,7 +105,7 @@ count_unresolved() {
             }
           }
         }
-      }' -F owner=tile-ai -F repo=TileOPs -F pr="$PR" \
+      }' -F owner="$REPO_OWNER" -F repo="$REPO_NAME" -F pr="$PR" \
         ${cursor:+-f after="$cursor"})
     page_unresolved=$(printf '%s' "$page" \
       | jq '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length')
@@ -171,11 +188,14 @@ if [[ "$ACTION" == "continue" ]]; then
     | jq "[.[][]|select(.user.login==\"$REVIEWER_LOGIN\" and .id>$LAST_REVIEW_COMMENT_ID_PREV)|{id,path,line,body,in_reply_to_id,created_at}]" \
     > "$SNAP_PREFIX.new-inline-comments.json"
 
-  # Snapshot ALL unresolved threads (paginated) — agent acts on these
-  # regardless of which reviewer raised them.
+  # Snapshot ALL unresolved threads (paginated). Inner comments() is
+  # also paginated below: the auto-resolver's whole-thread author check
+  # depends on seeing every comment, so a thread that overflows the
+  # first 100 comments would otherwise look bot-only and get
+  # mis-resolved.
   : > "$SNAP_PREFIX.unresolved-threads.json"
-  echo '[' > "$SNAP_PREFIX.unresolved-threads.json"
-  cursor=''; first_page=1
+  collected=()
+  cursor=''
   while :; do
     page=$(gh api graphql -f query='
       query($owner:String!,$repo:String!,$pr:Int!,$after:String){
@@ -184,20 +204,25 @@ if [[ "$ACTION" == "continue" ]]; then
             reviewThreads(first:100, after:$after){
               nodes{
                 id isResolved
-                comments(first:100){ nodes{ databaseId author{login} body path line } }
+                comments(first:100){
+                  pageInfo{ hasNextPage endCursor }
+                  nodes{
+                    id databaseId author{login} body path line
+                    commit{ oid }
+                  }
+                }
               }
               pageInfo{ hasNextPage endCursor }
             }
           }
         }
-      }' -F owner=tile-ai -F repo=TileOPs -F pr="$PR" \
+      }' -F owner="$REPO_OWNER" -F repo="$REPO_NAME" -F pr="$PR" \
         ${cursor:+-f after="$cursor"})
     items=$(printf '%s' "$page" \
       | jq -c '.data.repository.pullRequest.reviewThreads.nodes|map(select(.isResolved==false))[]')
     if [[ -n "$items" ]]; then
       while IFS= read -r line; do
-        [[ "$first_page" -eq 1 ]] && first_page=0 || echo ',' >> "$SNAP_PREFIX.unresolved-threads.json"
-        echo -n "$line" >> "$SNAP_PREFIX.unresolved-threads.json"
+        collected+=("$line")
       done <<< "$items"
     fi
     has_next=$(printf '%s' "$page" \
@@ -206,7 +231,98 @@ if [[ "$ACTION" == "continue" ]]; then
     cursor=$(printf '%s' "$page" \
       | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')
   done
-  echo ']' >> "$SNAP_PREFIX.unresolved-threads.json"
+
+  # Per-thread comments completion: any thread whose first comments page
+  # was truncated gets follow-up node(id) queries until exhausted, then
+  # the new nodes are merged into the thread's comments.nodes array.
+  # Without this, the whole-thread author check in auto-resolve-stale.sh
+  # could miss a human reply that landed past comment #100.
+  for i in "${!collected[@]}"; do
+    thread="${collected[$i]}"
+    has_more=$(printf '%s' "$thread" | jq -r '.comments.pageInfo.hasNextPage // false')
+    [[ "$has_more" != "true" ]] && continue
+    cursor=$(printf '%s' "$thread" | jq -r '.comments.pageInfo.endCursor')
+    thread_id=$(printf '%s' "$thread" | jq -r '.id')
+    extra_nodes='[]'
+    while :; do
+      page=$(gh api graphql -f query='
+        query($id:ID!,$after:String){
+          node(id:$id){
+            ... on PullRequestReviewThread{
+              comments(first:100, after:$after){
+                pageInfo{ hasNextPage endCursor }
+                nodes{
+                  id databaseId author{login} body path line
+                  commit{ oid }
+                }
+              }
+            }
+          }
+        }' -F id="$thread_id" -f after="$cursor")
+      page_nodes=$(printf '%s' "$page" | jq -c '.data.node.comments.nodes')
+      extra_nodes=$(jq -nc --argjson a "$extra_nodes" --argjson b "$page_nodes" '$a + $b')
+      has_next=$(printf '%s' "$page" | jq -r '.data.node.comments.pageInfo.hasNextPage')
+      [[ "$has_next" == "true" ]] || break
+      cursor=$(printf '%s' "$page" | jq -r '.data.node.comments.pageInfo.endCursor')
+    done
+    collected[$i]=$(printf '%s' "$thread" \
+      | jq -c --argjson extra "$extra_nodes" \
+          '.comments.nodes = (.comments.nodes + $extra) | .comments.pageInfo.hasNextPage = false')
+  done
+
+  # Emit the final array.
+  if (( ${#collected[@]} == 0 )); then
+    echo '[]' > "$SNAP_PREFIX.unresolved-threads.json"
+  else
+    {
+      echo '['
+      first_page=1
+      for thread in "${collected[@]}"; do
+        [[ "$first_page" -eq 1 ]] && first_page=0 || echo ','
+        printf '%s' "$thread"
+      done
+      echo ']'
+    } > "$SNAP_PREFIX.unresolved-threads.json"
+  fi
+
+  # Stale-bot auto-resolve: scoped to known bot identities anchored to a
+  # commit older than current HEAD. Humans and bots-at-HEAD are skipped;
+  # unknown bot-like logins are recorded for human triage. The classifier
+  # consumes the unresolved-threads snapshot directly so the pagination
+  # contract above is the single source of truth.
+  # Contract: $SNAP_PREFIX.auto-resolve.json is ALWAYS present after
+  # round-pre completes. Downstream consumers may rely on the file
+  # existing with the standard shape `{resolve, unknown_bot_like, skip}`.
+  # On classifier-missing or classifier-crash we still emit a valid empty
+  # plan plus an `error` field so the failure is visible without breaking
+  # the consumer's jq pipeline.
+  AR_OUT="$SNAP_PREFIX.auto-resolve.json"
+  if [[ -x "$SKILL_DIR/auto-resolve-stale.sh" && -f "$SKILL_DIR/known-bots.json" ]]; then
+    AR_INPUT="$SNAP_PREFIX.auto-resolve-input.json"
+    jq -n --arg sha "$HEAD_SHA" \
+      --slurpfile threads "$SNAP_PREFIX.unresolved-threads.json" \
+      '{head_sha:$sha, threads:$threads[0]}' > "$AR_INPUT"
+    # Write to a tmpfile and only mv into place on success — guarantees
+    # downstream readers never consume a half-written / empty file when
+    # the classifier crashes mid-emit.
+    AR_TMP="$AR_OUT.tmp"
+    if "$SKILL_DIR/auto-resolve-stale.sh" \
+        --threads "$AR_INPUT" \
+        --bots "$SKILL_DIR/known-bots.json" \
+        --run-dir "$RUN_DIR" \
+        --round "$N" \
+        > "$AR_TMP"; then
+      mv "$AR_TMP" "$AR_OUT"
+    else
+      echo "round-pre: auto-resolve-stale exited non-zero" >&2
+      rm -f "$AR_TMP"
+      jq -n --arg err "auto-resolve-stale exited non-zero" \
+        '{resolve:[], unknown_bot_like:[], skip:[], error:$err}' > "$AR_OUT"
+    fi
+  else
+    jq -n --arg err "auto-resolve-stale.sh or known-bots.json missing" \
+      '{resolve:[], unknown_bot_like:[], skip:[], error:$err}' > "$AR_OUT"
+  fi
 
   gh pr checks "$PR" --repo "$REPO" --json name,state,conclusion \
     > "$SNAP_PREFIX.ci.json" 2>/dev/null || echo '[]' > "$SNAP_PREFIX.ci.json"
