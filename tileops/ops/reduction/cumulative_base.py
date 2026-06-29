@@ -29,9 +29,11 @@ class CumulativeOp(Op):
     Subclasses must override `_op_kind` (class attribute) — the kernel's
     op-kind dispatch string (`"sum"` or `"prod"`).
 
+    ``dtype`` is not a ctor argument — it is read from the input tensor at
+    ``forward()`` and the kernel is built (and cached) per dtype.
+
     Args:
         N: Reduction dimension size (statically committed at ctor).
-        dtype: Data type (float32, float16, or bfloat16).
         dim: Reduction axis (default -1). Negative values are normalized at
             forward time (`dim % x.ndim`).
         kernel_map: Optional kernel override dict.
@@ -48,19 +50,17 @@ class CumulativeOp(Op):
     def __init__(
         self,
         N: int,
-        dtype: torch.dtype,
         dim: int = -1,
         *,
         kernel_map: Optional[Dict[str, Kernel]] = None,
         tune: bool = False,
     ) -> None:
         self.N = N
-        self.dtype = dtype
         self.dim = dim
         self.tune = tune
         self.N_padded = align_up(N, DEFAULT_ALIGNMENT)
         self.dispatch_kernel(kernel_map)
-        self._kernel_cache: Dict[int, Kernel] = {}
+        self._kernel_cache: Dict[tuple, Kernel] = {}
         self._last_roofline_mn: Optional[Tuple[int, int]] = None
 
     @property
@@ -73,6 +73,7 @@ class CumulativeOp(Op):
                 f"{type(self).__name__}.eval_roofline() requires a prior "
                 "forward() call to bind dynamic input shape (M)"
             )
+        assert self.dtype is not None  # bound by forward() alongside _last_roofline_mn
         M, N = self._last_roofline_mn
         elem_bytes = self.dtype.itemsize
         # Per row: N-1 ops (running sum/prod) ≈ M*N flops total.
@@ -80,18 +81,23 @@ class CumulativeOp(Op):
         return (M * N, 2 * M * N * elem_bytes)
 
     def _get_kernel(self, M: int) -> Kernel:
-        """Return a kernel built for (M, self.N), caching by M."""
-        if M not in self._kernel_cache:
-            self._kernel_cache[M] = self.kernel_map["cumulative_fwd"](
+        """Return a kernel built for (M, self.N, dtype), caching by (M, dtype).
+
+        ``self.dtype`` is bound from the input in ``_validate_and_normalize_dim``
+        before this is called, so the key includes it (one kernel per dtype).
+        """
+        key = (M, self.dtype)
+        if key not in self._kernel_cache:
+            self._kernel_cache[key] = self.kernel_map["cumulative_fwd"](
                 M, self.N, self._op_kind, self.dtype, tune=self.tune,
             )
-        return self._kernel_cache[M]
+        return self._kernel_cache[key]
 
     def _validate_and_normalize_dim(self, x: torch.Tensor) -> int:
         if not x.is_cuda:
             raise ValueError("x must be a CUDA tensor")
-        if x.dtype != self.dtype:
-            raise ValueError(f"Expected x.dtype {self.dtype}, got {x.dtype}")
+        self._validate_dtypes(x)
+        self.dtype = x.dtype
         ndim = x.ndim
         if not (-ndim <= self.dim < ndim):
             raise ValueError(

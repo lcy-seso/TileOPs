@@ -68,7 +68,6 @@ class CountNonzeroFwdOp(_ReduceOpBase):
 
     def __init__(
         self,
-        dtype: torch.dtype,
         dim: Union[int, List[int], Tuple[int, ...], None] = None,
         *,
         kernel_map: Optional[Dict[str, Kernel]] = None,
@@ -76,7 +75,7 @@ class CountNonzeroFwdOp(_ReduceOpBase):
     ):
         # count_nonzero never keeps dim (matches torch.count_nonzero)
         super().__init__(
-            dtype=dtype, dim=dim, keepdim=False,
+            dim=dim, keepdim=False,
             kernel_map=kernel_map, tune=tune,
         )
 

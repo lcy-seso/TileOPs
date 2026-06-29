@@ -74,7 +74,7 @@ def test_logical_reduce_conformance(
     zero_mask = torch.rand(_SHAPE, device="cuda") < 0.1
     x = raw.masked_fill(zero_mask, 0)
 
-    op = op_cls(dtype=dtype, dim=dim, keepdim=keepdim)
+    op = op_cls(dim=dim, keepdim=keepdim)
     y = op(x)
     if dim is None:
         ref = torch_fn(x)
@@ -121,7 +121,7 @@ def test_logical_reduce_unaligned_innermost(
     zero_mask = torch.rand(_UNALIGNED_SHAPE, device="cuda") < 0.1
     x = raw.masked_fill(zero_mask, 0)
 
-    op = op_cls(dtype=dtype, dim=dim, keepdim=False)
+    op = op_cls(dim=dim, keepdim=False)
     y = op(x)
     ref = torch_fn(x) if dim is None else torch_fn(x, dim=dim, keepdim=False)
 
@@ -163,7 +163,7 @@ def test_count_nonzero_conformance(dim, dtype: torch.dtype) -> None:
     zero_mask = torch.rand(_SHAPE, device="cuda") < 0.1
     x = raw.masked_fill(zero_mask, 0)
 
-    op = CountNonzeroFwdOp(dtype=dtype, dim=dim)
+    op = CountNonzeroFwdOp(dim=dim)
     y = op(x)
     ref = torch.count_nonzero(x, dim=dim)
 
@@ -195,7 +195,7 @@ def test_count_nonzero_unaligned_innermost(dim) -> None:
     zero_mask = torch.rand(_UNALIGNED_SHAPE, device="cuda") < 0.1
     x = raw.masked_fill(zero_mask, 0)
 
-    op = CountNonzeroFwdOp(dtype=dtype, dim=dim)
+    op = CountNonzeroFwdOp(dim=dim)
     y = op(x)
     ref = torch.count_nonzero(x, dim=dim)
 
