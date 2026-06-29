@@ -167,7 +167,7 @@ def _make_op(
         "inf": InfNormFwdOp,
     }
     cls = op_map[op_kind]
-    return cls(dtype=dtype, dim=dim, keepdim=keepdim, kernel_map=kernel_map)
+    return cls(dim=dim, keepdim=keepdim, kernel_map=kernel_map)
 
 
 # ---------------------------------------------------------------------------
@@ -598,7 +598,7 @@ def test_vector_norm_long_sequence_tiled(op_kind: str) -> None:
     )
     atol, rtol = _get_tolerances(dtype)
     test.check(op, *test.gen_inputs(), atol=atol, rtol=rtol)
-    kernel = op._kernel_cache[(3, 33024)]
+    kernel = op._kernel_cache[(3, 33024, dtype)]
     assert kernel.config["block_m"] > test.shape[0]
     assert kernel.config["tile_n"] > 0
 

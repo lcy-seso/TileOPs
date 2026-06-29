@@ -46,7 +46,7 @@ def test_sum_default_dim_full_reduction() -> None:
     from tileops.ops.reduction.reduce import SumFwdOp
 
     x = _make_float(_FLOAT_SHAPE, torch.float16)
-    op = SumFwdOp(dtype=torch.float16)
+    op = SumFwdOp()
     y = op(x)
     assert y.shape == torch.sum(x).shape
 
@@ -56,7 +56,7 @@ def test_mean_default_dim_full_reduction() -> None:
     from tileops.ops.reduction.reduce import MeanFwdOp
 
     x = _make_float(_FLOAT_SHAPE, torch.float16)
-    op = MeanFwdOp(dtype=torch.float16)
+    op = MeanFwdOp()
     y = op(x)
     assert y.shape == torch.mean(x).shape
 
@@ -66,7 +66,7 @@ def test_amax_default_dim_full_reduction() -> None:
     from tileops.ops.reduction.reduce import AmaxFwdOp
 
     x = _make_float(_FLOAT_SHAPE, torch.float16)
-    op = AmaxFwdOp(dtype=torch.float16)
+    op = AmaxFwdOp()
     y = op(x)
     assert y.shape == torch.amax(x).shape
 
@@ -76,7 +76,7 @@ def test_amin_default_dim_full_reduction() -> None:
     from tileops.ops.reduction.reduce import AminFwdOp
 
     x = _make_float(_FLOAT_SHAPE, torch.float16)
-    op = AminFwdOp(dtype=torch.float16)
+    op = AminFwdOp()
     y = op(x)
     assert y.shape == torch.amin(x).shape
 
@@ -86,7 +86,7 @@ def test_var_default_dim_full_reduction() -> None:
     from tileops.ops.reduction.reduce import VarFwdOp
 
     x = _make_float(_FLOAT_SHAPE, torch.float16)
-    op = VarFwdOp(dtype=torch.float16)
+    op = VarFwdOp()
     y = op(x)
     assert y.shape == torch.var(x).shape
 
@@ -96,7 +96,7 @@ def test_std_default_dim_full_reduction() -> None:
     from tileops.ops.reduction.reduce import StdFwdOp
 
     x = _make_float(_FLOAT_SHAPE, torch.float16)
-    op = StdFwdOp(dtype=torch.float16)
+    op = StdFwdOp()
     y = op(x)
     assert y.shape == torch.std(x).shape
 
@@ -106,7 +106,7 @@ def test_var_mean_default_dim_full_reduction() -> None:
     from tileops.ops.reduction.reduce import VarMeanFwdOp
 
     x = _make_float(_FLOAT_SHAPE, torch.float16)
-    op = VarMeanFwdOp(dtype=torch.float16)
+    op = VarMeanFwdOp()
     var_out, mean_out = op(x)
     ref_var, ref_mean = torch.var_mean(x)
     assert var_out.shape == ref_var.shape
@@ -118,7 +118,7 @@ def test_all_default_dim_full_reduction() -> None:
     from tileops.ops.reduction.all_op import AllFwdOp
 
     x = _make_logical(_LOGICAL_SHAPE, torch.float16)
-    op = AllFwdOp(dtype=torch.float16)
+    op = AllFwdOp()
     y = op(x)
     assert y.shape == torch.all(x.bool()).shape
     assert y.dtype == torch.bool
@@ -129,7 +129,7 @@ def test_any_default_dim_full_reduction() -> None:
     from tileops.ops.reduction.any_op import AnyFwdOp
 
     x = _make_logical(_LOGICAL_SHAPE, torch.float16)
-    op = AnyFwdOp(dtype=torch.float16)
+    op = AnyFwdOp()
     y = op(x)
     assert y.shape == torch.any(x.bool()).shape
     assert y.dtype == torch.bool
@@ -140,7 +140,7 @@ def test_count_nonzero_default_dim_full_reduction() -> None:
     from tileops.ops.reduction.count_nonzero import CountNonzeroFwdOp
 
     x = _make_logical(_LOGICAL_SHAPE, torch.float16)
-    op = CountNonzeroFwdOp(dtype=torch.float16)
+    op = CountNonzeroFwdOp()
     y = op(x)
     assert y.shape == torch.count_nonzero(x).shape
     assert y.dtype == torch.int64
@@ -157,7 +157,7 @@ def test_prod_default_dim_last_axis() -> None:
 
     # use a narrow value range so fp16 prod is numerically stable
     x = torch.rand(*_FLOAT_SHAPE, dtype=torch.float16, device="cuda") * 0.01 + 0.99
-    op = ProdFwdOp(dtype=torch.float16)
+    op = ProdFwdOp()
     y = op(x)
     assert y.shape == torch.prod(x, dim=-1).shape
 
@@ -173,7 +173,7 @@ def test_all_empty_dim_noop(empty_dim) -> None:
     from tileops.ops.reduction.all_op import AllFwdOp
 
     x = _make_logical(_LOGICAL_SHAPE, torch.float16)
-    op = AllFwdOp(dtype=torch.float16, dim=empty_dim)
+    op = AllFwdOp(dim=empty_dim)
     y = op(x)
     assert y.shape == x.shape
     assert y.dtype == torch.bool
@@ -186,7 +186,7 @@ def test_any_empty_dim_noop(empty_dim) -> None:
     from tileops.ops.reduction.any_op import AnyFwdOp
 
     x = _make_logical(_LOGICAL_SHAPE, torch.float16)
-    op = AnyFwdOp(dtype=torch.float16, dim=empty_dim)
+    op = AnyFwdOp(dim=empty_dim)
     y = op(x)
     assert y.shape == x.shape
     assert y.dtype == torch.bool
@@ -262,7 +262,7 @@ def test_all_empty_dim_noop_rejects_cpu_tensor() -> None:
     from tileops.ops.reduction.all_op import AllFwdOp
 
     x = (torch.randint(-1, 2, _LOGICAL_SHAPE)).to(torch.float16)  # cpu
-    op = AllFwdOp(dtype=torch.float16, dim=[])
+    op = AllFwdOp(dim=[])
     with pytest.raises(ValueError, match="CUDA tensor"):
         op(x)
 
@@ -272,29 +272,8 @@ def test_any_empty_dim_noop_rejects_cpu_tensor() -> None:
     from tileops.ops.reduction.any_op import AnyFwdOp
 
     x = (torch.randint(-1, 2, _LOGICAL_SHAPE)).to(torch.float16)  # cpu
-    op = AnyFwdOp(dtype=torch.float16, dim=[])
+    op = AnyFwdOp(dim=[])
     with pytest.raises(ValueError, match="CUDA tensor"):
-        op(x)
-
-
-@pytest.mark.smoke
-def test_all_empty_dim_noop_rejects_wrong_dtype() -> None:
-    """dim=[] must still validate dtype against the op's declared dtype."""
-    from tileops.ops.reduction.all_op import AllFwdOp
-
-    x = _make_logical(_LOGICAL_SHAPE, torch.float32)  # cuda, fp32
-    op = AllFwdOp(dtype=torch.float16, dim=[])
-    with pytest.raises(ValueError, match="Expected x.dtype"):
-        op(x)
-
-
-@pytest.mark.smoke
-def test_any_empty_dim_noop_rejects_wrong_dtype() -> None:
-    from tileops.ops.reduction.any_op import AnyFwdOp
-
-    x = _make_logical(_LOGICAL_SHAPE, torch.float32)
-    op = AnyFwdOp(dtype=torch.float16, dim=[])
-    with pytest.raises(ValueError, match="Expected x.dtype"):
         op(x)
 
 
@@ -306,7 +285,7 @@ def test_all_empty_dim_noop_binds_roofline() -> None:
     from tileops.ops.reduction.all_op import AllFwdOp
 
     x = _make_logical(_LOGICAL_SHAPE, torch.float16)
-    op = AllFwdOp(dtype=torch.float16, dim=[])
+    op = AllFwdOp(dim=[])
     op(x)
     flops, mem_bytes = op.eval_roofline()
     numel = x.numel()
@@ -329,7 +308,7 @@ def test_any_empty_dim_noop_binds_roofline() -> None:
     from tileops.ops.reduction.any_op import AnyFwdOp
 
     x = _make_logical(_LOGICAL_SHAPE, torch.float16)
-    op = AnyFwdOp(dtype=torch.float16, dim=[])
+    op = AnyFwdOp(dim=[])
     op(x)
     flops, mem_bytes = op.eval_roofline()
     numel = x.numel()
@@ -347,7 +326,7 @@ def test_validate_dim_rejects_bool_scalar() -> None:
     from tileops.ops.reduction.reduce import SumFwdOp
 
     with pytest.raises(TypeError, match="dim must not be bool"):
-        SumFwdOp(dtype=torch.float16, dim=True)
+        SumFwdOp(dim=True)
 
 
 @pytest.mark.smoke
@@ -356,4 +335,4 @@ def test_validate_dim_rejects_bool_in_list() -> None:
     from tileops.ops.reduction.reduce import SumFwdOp
 
     with pytest.raises(TypeError, match="must be int .not bool"):
-        SumFwdOp(dtype=torch.float16, dim=[True, 0])
+        SumFwdOp(dim=[True, 0])

@@ -187,7 +187,7 @@ def test_argmax_op(m: int, n: int, dtype: torch.dtype) -> None:
     from tileops.ops.reduction.argmax import ArgmaxFwdOp
 
     test = ArgreduceTest(m, n, dtype, "argmax")
-    op = ArgmaxFwdOp(dtype=dtype, dim=-1)
+    op = ArgmaxFwdOp(dim=-1)
     test.check(op, *test.gen_inputs(), compare=_exact_compare)
 
 
@@ -197,7 +197,7 @@ def test_argmax_non_contiguous(m: int, n: int, dtype: torch.dtype) -> None:
 
     x_full = torch.randn(m, n * 2, dtype=dtype, device="cuda")
     x = x_full[:, :n]
-    op = ArgmaxFwdOp(dtype=dtype, dim=-1)
+    op = ArgmaxFwdOp(dim=-1)
     ref = x.contiguous().argmax(dim=-1)
     y = _call(op, x)
     assert y.dtype == torch.int64
@@ -209,7 +209,7 @@ def test_argmax_3d(batch: int, seq: int, hidden: int, dtype: torch.dtype) -> Non
     from tileops.ops.reduction.argmax import ArgmaxFwdOp
 
     x = torch.randn(batch, seq, hidden, dtype=dtype, device="cuda")
-    op = ArgmaxFwdOp(dtype=dtype, dim=-1)
+    op = ArgmaxFwdOp(dim=-1)
     ref = x.argmax(dim=-1)
     y = _call(op, x)
     assert y.dtype == torch.int64
@@ -221,7 +221,7 @@ def test_argmax_4d(b0: int, b1: int, b2: int, n: int, dtype: torch.dtype) -> Non
     from tileops.ops.reduction.argmax import ArgmaxFwdOp
 
     x = torch.randn(b0, b1, b2, n, dtype=dtype, device="cuda")
-    op = ArgmaxFwdOp(dtype=dtype, dim=-1)
+    op = ArgmaxFwdOp(dim=-1)
     ref = x.argmax(dim=-1)
     y = _call(op, x)
     assert y.dtype == torch.int64
@@ -233,7 +233,7 @@ def test_argmax_1d(n: int, dtype: torch.dtype) -> None:
     from tileops.ops.reduction.argmax import ArgmaxFwdOp
 
     x = torch.randn(n, dtype=dtype, device="cuda")
-    op = ArgmaxFwdOp(dtype=dtype, dim=-1)
+    op = ArgmaxFwdOp(dim=-1)
     ref = x.argmax(dim=-1)
     y = _call(op, x)
     assert y.dtype == torch.int64
@@ -246,7 +246,7 @@ def test_argmax_3d_dim0(batch: int, seq: int, hidden: int, dtype: torch.dtype) -
     from tileops.ops.reduction.argmax import ArgmaxFwdOp
 
     x = torch.randn(batch, seq, hidden, dtype=dtype, device="cuda")
-    op = ArgmaxFwdOp(dtype=dtype, dim=0)
+    op = ArgmaxFwdOp(dim=0)
     ref = x.argmax(dim=0)
     y = _call(op, x)
     assert y.shape == ref.shape, f"shape mismatch: {y.shape} vs {ref.shape}"
@@ -260,7 +260,7 @@ def test_argmax_3d_dim0_keepdim(batch: int, seq: int, hidden: int, dtype: torch.
     from tileops.ops.reduction.argmax import ArgmaxFwdOp
 
     x = torch.randn(batch, seq, hidden, dtype=dtype, device="cuda")
-    op = ArgmaxFwdOp(dtype=dtype, dim=0, keepdim=True)
+    op = ArgmaxFwdOp(dim=0, keepdim=True)
     ref = x.argmax(dim=0, keepdim=True)
     y = _call(op, x)
     assert y.shape == ref.shape, f"shape mismatch: {y.shape} vs {ref.shape}"
@@ -274,7 +274,7 @@ def test_argmax_4d_dim0(b0: int, b1: int, b2: int, n: int, dtype: torch.dtype) -
     from tileops.ops.reduction.argmax import ArgmaxFwdOp
 
     x = torch.randn(b0, b1, b2, n, dtype=dtype, device="cuda")
-    op = ArgmaxFwdOp(dtype=dtype, dim=0)
+    op = ArgmaxFwdOp(dim=0)
     ref = x.argmax(dim=0)
     y = _call(op, x)
     assert y.shape == ref.shape, f"shape mismatch: {y.shape} vs {ref.shape}"
@@ -288,7 +288,7 @@ def test_argmax_4d_dim0_keepdim(b0: int, b1: int, b2: int, n: int, dtype: torch.
     from tileops.ops.reduction.argmax import ArgmaxFwdOp
 
     x = torch.randn(b0, b1, b2, n, dtype=dtype, device="cuda")
-    op = ArgmaxFwdOp(dtype=dtype, dim=0, keepdim=True)
+    op = ArgmaxFwdOp(dim=0, keepdim=True)
     ref = x.argmax(dim=0, keepdim=True)
     y = _call(op, x)
     assert y.shape == ref.shape, f"shape mismatch: {y.shape} vs {ref.shape}"
@@ -302,7 +302,7 @@ def test_argmax_spec_dim(shape: tuple, dim: int, keepdim: bool, dtype: torch.dty
     from tileops.ops.reduction.argmax import ArgmaxFwdOp
 
     x = torch.randn(*shape, dtype=dtype, device="cuda")
-    op = ArgmaxFwdOp(dtype=dtype, dim=dim, keepdim=keepdim)
+    op = ArgmaxFwdOp(dim=dim, keepdim=keepdim)
     ref = x.argmax(dim=dim, keepdim=keepdim)
     y = _call(op, x)
     assert y.shape == ref.shape, f"shape mismatch: {y.shape} vs {ref.shape}"
@@ -320,7 +320,7 @@ def test_argmin_op(m: int, n: int, dtype: torch.dtype) -> None:
     from tileops.ops.reduction.argmin import ArgminFwdOp
 
     test = ArgreduceTest(m, n, dtype, "argmin")
-    op = ArgminFwdOp(dtype=dtype, dim=-1)
+    op = ArgminFwdOp(dim=-1)
     test.check(op, *test.gen_inputs(), compare=_exact_compare)
 
 
@@ -330,7 +330,7 @@ def test_argmin_non_contiguous(m: int, n: int, dtype: torch.dtype) -> None:
 
     x_full = torch.randn(m, n * 2, dtype=dtype, device="cuda")
     x = x_full[:, :n]
-    op = ArgminFwdOp(dtype=dtype, dim=-1)
+    op = ArgminFwdOp(dim=-1)
     ref = x.contiguous().argmin(dim=-1)
     y = _call(op, x)
     assert y.dtype == torch.int64
@@ -342,7 +342,7 @@ def test_argmin_3d(batch: int, seq: int, hidden: int, dtype: torch.dtype) -> Non
     from tileops.ops.reduction.argmin import ArgminFwdOp
 
     x = torch.randn(batch, seq, hidden, dtype=dtype, device="cuda")
-    op = ArgminFwdOp(dtype=dtype, dim=-1)
+    op = ArgminFwdOp(dim=-1)
     ref = x.argmin(dim=-1)
     y = _call(op, x)
     assert y.dtype == torch.int64
@@ -354,7 +354,7 @@ def test_argmin_4d(b0: int, b1: int, b2: int, n: int, dtype: torch.dtype) -> Non
     from tileops.ops.reduction.argmin import ArgminFwdOp
 
     x = torch.randn(b0, b1, b2, n, dtype=dtype, device="cuda")
-    op = ArgminFwdOp(dtype=dtype, dim=-1)
+    op = ArgminFwdOp(dim=-1)
     ref = x.argmin(dim=-1)
     y = _call(op, x)
     assert y.dtype == torch.int64
@@ -366,7 +366,7 @@ def test_argmin_1d(n: int, dtype: torch.dtype) -> None:
     from tileops.ops.reduction.argmin import ArgminFwdOp
 
     x = torch.randn(n, dtype=dtype, device="cuda")
-    op = ArgminFwdOp(dtype=dtype, dim=-1)
+    op = ArgminFwdOp(dim=-1)
     ref = x.argmin(dim=-1)
     y = _call(op, x)
     assert y.dtype == torch.int64
@@ -379,7 +379,7 @@ def test_argmin_3d_dim0(batch: int, seq: int, hidden: int, dtype: torch.dtype) -
     from tileops.ops.reduction.argmin import ArgminFwdOp
 
     x = torch.randn(batch, seq, hidden, dtype=dtype, device="cuda")
-    op = ArgminFwdOp(dtype=dtype, dim=0)
+    op = ArgminFwdOp(dim=0)
     ref = x.argmin(dim=0)
     y = _call(op, x)
     assert y.shape == ref.shape, f"shape mismatch: {y.shape} vs {ref.shape}"
@@ -393,7 +393,7 @@ def test_argmin_3d_dim0_keepdim(batch: int, seq: int, hidden: int, dtype: torch.
     from tileops.ops.reduction.argmin import ArgminFwdOp
 
     x = torch.randn(batch, seq, hidden, dtype=dtype, device="cuda")
-    op = ArgminFwdOp(dtype=dtype, dim=0, keepdim=True)
+    op = ArgminFwdOp(dim=0, keepdim=True)
     ref = x.argmin(dim=0, keepdim=True)
     y = _call(op, x)
     assert y.shape == ref.shape, f"shape mismatch: {y.shape} vs {ref.shape}"
@@ -407,7 +407,7 @@ def test_argmin_4d_dim0(b0: int, b1: int, b2: int, n: int, dtype: torch.dtype) -
     from tileops.ops.reduction.argmin import ArgminFwdOp
 
     x = torch.randn(b0, b1, b2, n, dtype=dtype, device="cuda")
-    op = ArgminFwdOp(dtype=dtype, dim=0)
+    op = ArgminFwdOp(dim=0)
     ref = x.argmin(dim=0)
     y = _call(op, x)
     assert y.shape == ref.shape, f"shape mismatch: {y.shape} vs {ref.shape}"
@@ -421,7 +421,7 @@ def test_argmin_4d_dim0_keepdim(b0: int, b1: int, b2: int, n: int, dtype: torch.
     from tileops.ops.reduction.argmin import ArgminFwdOp
 
     x = torch.randn(b0, b1, b2, n, dtype=dtype, device="cuda")
-    op = ArgminFwdOp(dtype=dtype, dim=0, keepdim=True)
+    op = ArgminFwdOp(dim=0, keepdim=True)
     ref = x.argmin(dim=0, keepdim=True)
     y = _call(op, x)
     assert y.shape == ref.shape, f"shape mismatch: {y.shape} vs {ref.shape}"
@@ -435,7 +435,7 @@ def test_argmin_spec_dim(shape: tuple, dim: int, keepdim: bool, dtype: torch.dty
     from tileops.ops.reduction.argmin import ArgminFwdOp
 
     x = torch.randn(*shape, dtype=dtype, device="cuda")
-    op = ArgminFwdOp(dtype=dtype, dim=dim, keepdim=keepdim)
+    op = ArgminFwdOp(dim=dim, keepdim=keepdim)
     ref = x.argmin(dim=dim, keepdim=keepdim)
     y = _call(op, x)
     assert y.shape == ref.shape, f"shape mismatch: {y.shape} vs {ref.shape}"
@@ -464,7 +464,7 @@ def test_argreduce_rejects_multidim(op_cls_path: str, dim) -> None:
     op_cls = getattr(mod, cls_name)
 
     with pytest.raises((TypeError, ValueError)):
-        op_cls(dtype=torch.float16, dim=dim)
+        op_cls(dim=dim)
 
 
 # ---------------------------------------------------------------------------
@@ -510,12 +510,12 @@ def test_argmax_dim_none(shape: tuple, dtype: torch.dtype) -> None:
     x = torch.randn(*shape, dtype=dtype, device="cuda")
     ref_flat = torch.argmax(x)
 
-    y = _call(ArgmaxFwdOp(dtype=dtype, dim=None), x)
+    y = _call(ArgmaxFwdOp(dim=None), x)
     assert y.dtype == torch.int64
     assert y.shape == ref_flat.shape, f"shape mismatch: {y.shape} vs {ref_flat.shape}"
     assert torch.equal(y, ref_flat), f"dim=None argmax mismatch on shape={shape} dtype={dtype}"
 
-    y_keep = _call(ArgmaxFwdOp(dtype=dtype, dim=None, keepdim=True), x)
+    y_keep = _call(ArgmaxFwdOp(dim=None, keepdim=True), x)
     expected_shape = tuple(1 for _ in shape)
     assert y_keep.shape == expected_shape, f"keepdim shape mismatch: {y_keep.shape} vs {expected_shape}"
     assert torch.equal(y_keep.reshape(()), ref_flat), (
@@ -531,12 +531,12 @@ def test_argmin_dim_none(shape: tuple, dtype: torch.dtype) -> None:
     x = torch.randn(*shape, dtype=dtype, device="cuda")
     ref_flat = torch.argmin(x)
 
-    y = _call(ArgminFwdOp(dtype=dtype, dim=None), x)
+    y = _call(ArgminFwdOp(dim=None), x)
     assert y.dtype == torch.int64
     assert y.shape == ref_flat.shape, f"shape mismatch: {y.shape} vs {ref_flat.shape}"
     assert torch.equal(y, ref_flat), f"dim=None argmin mismatch on shape={shape} dtype={dtype}"
 
-    y_keep = _call(ArgminFwdOp(dtype=dtype, dim=None, keepdim=True), x)
+    y_keep = _call(ArgminFwdOp(dim=None, keepdim=True), x)
     expected_shape = tuple(1 for _ in shape)
     assert y_keep.shape == expected_shape, f"keepdim shape mismatch: {y_keep.shape} vs {expected_shape}"
     assert torch.equal(y_keep.reshape(()), ref_flat), (

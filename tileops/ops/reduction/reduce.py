@@ -88,7 +88,6 @@ class _ReduceOpBase(Op):
 
     def __init__(
         self,
-        dtype: torch.dtype,
         dim: Union[int, List[int], Tuple[int, ...], None] = None,
         keepdim: bool = False,
         *,
@@ -97,8 +96,10 @@ class _ReduceOpBase(Op):
     ):
         """Construct a reduce op.
 
+        ``dtype`` is not a ctor argument — it is read from the input tensor
+        at ``forward()`` and the kernel is built (and cached) per dtype.
+
         Args:
-            dtype: Input data type.
             dim: Reduction dimension (default ``None``, i.e. full reduction).
                 Accepts ``int``, ``list[int]``, ``tuple[int, ...]``, or
                 ``None``.
@@ -106,7 +107,6 @@ class _ReduceOpBase(Op):
             kernel_map: Optional override for kernel dispatch.
             tune: Whether to autotune (default ``False``).
         """
-        self.dtype = dtype
         self.dim = dim
         self.keepdim = keepdim
         self._tune = tune
@@ -235,12 +235,13 @@ class _ReduceOpBase(Op):
         """Validate device, dtype, and rank of the forward input.
 
         Shared by ``_prepare_input`` and the ``dim=[]`` noop short-circuit
-        so both paths enforce the same forward contract.
+        so both paths enforce the same forward contract. Binds
+        ``self.dtype`` from the input (the op commits no dtype at ctor).
         """
         if not x.is_cuda:
             raise ValueError("x must be a CUDA tensor")
-        if x.dtype != self.dtype:
-            raise ValueError(f"Expected x.dtype {self.dtype}, got {x.dtype}")
+        self._validate_dtypes(x)
+        self.dtype = x.dtype
         if x.ndim == 0:
             raise ValueError("Input tensor must be at least 1D")
 
@@ -325,8 +326,8 @@ class _ReduceOpBase(Op):
             return None
         if not x.is_cuda:
             raise ValueError("x must be a CUDA tensor")
-        if x.dtype != self.dtype:
-            raise ValueError(f"Expected x.dtype {self.dtype}, got {x.dtype}")
+        self._validate_dtypes(x)
+        self.dtype = x.dtype
         self._validate_scalar_dim()
         self._last_roofline_mn = (1, 1)
         return self._scalar_forward(x)
@@ -369,6 +370,7 @@ class _ReduceOpBase(Op):
                 f"{type(self).__name__}.eval_roofline() requires a prior forward() "
                 "call to bind dynamic input shape"
             )
+        assert self.dtype is not None  # bound by forward() alongside _last_roofline_mn
         M, N = self._last_roofline_mn
         elem_bytes = self.dtype.itemsize
         op_kind = self._op_kind
@@ -414,8 +416,13 @@ class _ReduceOpBase(Op):
     # ------------------------------------------------------------------
 
     def _get_or_create_kernel(self, M: int, N: int) -> object:
-        """Return a cached kernel for (M, N), creating one if needed."""
-        key = (M, N)
+        """Return a cached kernel for (M, N, dtype), creating one if needed.
+
+        ``self.dtype`` is bound from the input in ``_validate_input_tensor``
+        before this is called, so the key includes it: a second forward()
+        with a different (manifest-permitted) dtype caches its own kernel.
+        """
+        key = (M, N, self.dtype)
         if key not in self._kernel_cache:
             kernel_cls = self.kernel_map[self._kernel_key]
             self._kernel_cache[key] = kernel_cls(
@@ -587,7 +594,6 @@ class ProdFwdOp(_SimpleReduceOp):
 
     def __init__(
         self,
-        dtype: torch.dtype,
         dim: int = -1,
         keepdim: bool = False,
         *,
@@ -596,15 +602,16 @@ class ProdFwdOp(_SimpleReduceOp):
     ):
         """Construct ProdFwdOp.
 
+        ``dtype`` is read from the input at ``forward()``, not a ctor arg.
+
         Args:
-            dtype: Input data type.
             dim (int): reduction dimension (default ``-1``).
             keepdim: Whether to retain reduced dims as size 1.
             kernel_map: Optional override for kernel dispatch.
             tune: Whether to autotune (default ``False``).
         """
         super().__init__(
-            dtype=dtype, dim=dim, keepdim=keepdim,
+            dim=dim, keepdim=keepdim,
             kernel_map=kernel_map, tune=tune,
         )
 
@@ -649,7 +656,6 @@ class _WelfordReduceOp(_ReduceOpBase):
 
     def __init__(
         self,
-        dtype: torch.dtype,
         dim: Union[int, List[int], Tuple[int, ...], None] = None,
         correction: int = 1,
         keepdim: bool = False,
@@ -659,8 +665,9 @@ class _WelfordReduceOp(_ReduceOpBase):
     ):
         """Construct a Welford-based reduce op.
 
+        ``dtype`` is read from the input at ``forward()``, not a ctor arg.
+
         Args:
-            dtype: Input data type.
             dim: Reduction dimension (default ``None``, i.e. full reduction).
                 Accepts ``int``, ``list[int]``, ``tuple[int, ...]``, or
                 ``None``.
@@ -671,7 +678,7 @@ class _WelfordReduceOp(_ReduceOpBase):
         """
         self.correction = correction
         super().__init__(
-            dtype=dtype, dim=dim, keepdim=keepdim,
+            dim=dim, keepdim=keepdim,
             kernel_map=kernel_map, tune=tune,
         )
 

@@ -4,14 +4,12 @@ Provides:
   - LogSumExpFwdOp: y = logsumexp(x, dim, keepdim)
 
 Example:
-    >>> op = LogSumExpFwdOp(dtype=torch.float16, dim=-1)
+    >>> op = LogSumExpFwdOp(dim=-1)
     >>> x = torch.randn(1024, 4096, dtype=torch.float16, device="cuda")
-    >>> y = op(x)  # shape: (1024,)
+    >>> y = op(x)  # shape: (1024,); dtype taken from x
 """
 
 from typing import Dict, List, Optional, Union
-
-import torch
 
 from tileops.kernels.kernel_base import Kernel
 from tileops.kernels.reduction.logsumexp import LogSumExpKernel
@@ -42,12 +40,11 @@ class LogSumExpFwdOp(_SoftmaxBaseOp):
 
     def __init__(
         self,
-        dtype: torch.dtype,
         dim: Union[int, List[int]] = -1,
         keepdim: bool = False,
         *,
         kernel_map: Optional[Dict[str, Kernel]] = None,
         tune: bool = False,
     ):
-        super().__init__(dtype=dtype, dim=dim, kernel_map=kernel_map, tune=tune)
+        super().__init__(dim=dim, kernel_map=kernel_map, tune=tune)
         self.keepdim = keepdim

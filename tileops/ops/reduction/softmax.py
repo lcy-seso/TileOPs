@@ -4,14 +4,12 @@ Provides:
   - SoftmaxFwdOp: y = softmax(x, dim)
 
 Example:
-    >>> op = SoftmaxFwdOp(N=4096, dtype=torch.float16, dim=-1)
+    >>> op = SoftmaxFwdOp(N=4096, dim=-1)
     >>> x = torch.randn(2, 32, 4096, dtype=torch.float16, device="cuda")
-    >>> y = op(x)  # shape: (2, 32, 4096)
+    >>> y = op(x)  # shape: (2, 32, 4096); dtype taken from x
 """
 
 from typing import Dict, Optional
-
-import torch
 
 from tileops.kernels.kernel_base import Kernel
 from tileops.kernels.reduction.softmax import SoftmaxKernel
@@ -32,7 +30,6 @@ class SoftmaxFwdOp(_SoftmaxBaseOp):
     Args:
         N: Reduction-dim size (statically committed at ctor; corresponds to
             manifest ``static_dims.N = "x.shape[dim]"``).
-        dtype: Data type (float32, float16, or bfloat16).
         dim: Reduction dimension (default ``None``, matching PyTorch's
             ``torch.nn.functional.softmax``). When ``None``, the axis is
             resolved at forward time using PyTorch's implicit-axis rule
@@ -49,12 +46,11 @@ class SoftmaxFwdOp(_SoftmaxBaseOp):
     def __init__(
         self,
         N: int,
-        dtype: torch.dtype,
         dim: Optional[int] = None,
         *,
         kernel_map: Optional[Dict[str, Kernel]] = None,
         tune: bool = False,
     ):
         super().__init__(
-            N=N, dtype=dtype, dim=dim, kernel_map=kernel_map, tune=tune,
+            dim=dim, N=N, kernel_map=kernel_map, tune=tune,
         )

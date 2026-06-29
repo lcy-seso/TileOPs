@@ -44,8 +44,10 @@ class _SoftmaxBaseOp(Op):
     need to set ``_op_kind``, ``_kernel_key``, ``_kernel_class`` and
     override output reshaping if needed.
 
+    ``dtype`` is not a ctor argument — it is read from the input tensor at
+    ``forward()`` and the kernel is built (and cached) per dtype.
+
     Args:
-        dtype: Data type (float32, float16, or bfloat16).
         dim: Reduction dimension (default -1).
         kernel_map: Optional override for kernel dispatch.
         tune: Whether to autotune (default False).
@@ -64,14 +66,12 @@ class _SoftmaxBaseOp(Op):
 
     def __init__(
         self,
-        dtype: torch.dtype,
-        dim: Union[int, List[int]] = -1,
+        dim: Union[int, List[int], None] = -1,
         N: Optional[int] = None,
         *,
         kernel_map: Optional[Dict[str, Kernel]] = None,
         tune: bool = False,
     ):
-        self.dtype = dtype
         self.dim = dim
         self.N = N
         self.keepdim = False
@@ -89,11 +89,11 @@ class _SoftmaxBaseOp(Op):
     # ------------------------------------------------------------------
 
     def _validate(self, x: torch.Tensor) -> None:
-        """Validate input tensor."""
+        """Validate input tensor; bind ``self.dtype`` from it (no ctor dtype)."""
         if not x.is_cuda:
             raise ValueError("x must be a CUDA tensor")
-        if x.dtype != self.dtype:
-            raise ValueError(f"Expected x.dtype {self.dtype}, got {x.dtype}")
+        self._validate_dtypes(x)
+        self.dtype = x.dtype
         if x.ndim == 0:
             raise ValueError("Input tensor must be at least 1D")
 
@@ -191,6 +191,7 @@ class _SoftmaxBaseOp(Op):
                 f"{type(self).__name__}.eval_roofline() requires a prior forward() "
                 "call to bind dynamic input shape"
             )
+        assert self.dtype is not None  # bound by forward() alongside _last_roofline_mn
         M, N = self._last_roofline_mn
         elem_bytes = self.dtype.itemsize
         if self._op_kind == "softmax":
@@ -204,8 +205,12 @@ class _SoftmaxBaseOp(Op):
         )
 
     def _get_or_create_kernel(self, M: int, N: int, device_index: int | None = None) -> object:
-        """Return a cached kernel for (M, N, device_index), creating one if needed."""
-        key = (M, N, device_index)
+        """Return a cached kernel for (M, N, device_index, dtype), creating one if needed.
+
+        ``self.dtype`` is bound from the input in ``_validate`` before this is
+        called, so the key includes it (one kernel per distinct dtype).
+        """
+        key = (M, N, device_index, self.dtype)
         if key not in self._kernel_cache:
             kernel_cls = self.kernel_map[self._kernel_key]
             self._kernel_cache[key] = kernel_cls(

@@ -637,7 +637,7 @@ _LOGSUMEXP_OP_NAME = "LogSumExpFwdOp"
 def _make_logsumexp_op(dtype, dim, keepdim):
     from tileops.ops.reduction.logsumexp import LogSumExpFwdOp
 
-    return LogSumExpFwdOp(dtype=dtype, dim=dim, keepdim=keepdim)
+    return LogSumExpFwdOp(dim=dim, keepdim=keepdim)
 
 
 @LogSumExpMultidimFixture

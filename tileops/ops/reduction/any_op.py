@@ -66,7 +66,6 @@ class AnyFwdOp(_ReduceOpBase):
 
     def __init__(
         self,
-        dtype: torch.dtype,
         dim: Union[int, List[int], Tuple[int, ...], None] = None,
         keepdim: bool = False,
         *,
@@ -75,8 +74,9 @@ class AnyFwdOp(_ReduceOpBase):
     ):
         """Construct AnyFwdOp.
 
+        ``dtype`` is read from the input at ``forward()``, not a ctor arg.
+
         Args:
-            dtype: Input data type.
             dim: Reduction dimension (default ``None``, i.e. full reduction).
                 Accepts ``int``, ``list[int]``, ``tuple[int, ...]``, or
                 ``None``.
@@ -85,7 +85,7 @@ class AnyFwdOp(_ReduceOpBase):
             tune: Whether to autotune (default ``False``).
         """
         super().__init__(
-            dtype=dtype, dim=dim, keepdim=keepdim,
+            dim=dim, keepdim=keepdim,
             kernel_map=kernel_map, tune=tune,
         )
 

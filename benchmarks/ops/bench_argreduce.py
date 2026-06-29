@@ -42,7 +42,7 @@ def test_argmax_bench(shape: tuple, dtype: torch.dtype, extra: dict) -> None:
     workload = ArgmaxTest(shape, dtype)
     inputs = workload.gen_inputs()
 
-    op = ArgmaxFwdOp(dtype=dtype, **extra)
+    op = ArgmaxFwdOp(**extra)
     bm = ManifestBenchmark(_ARGMAX_OP, op, workload)
     # FIXME(staged-rollout): ArgreduceKernel skips large-N manifest workloads
     #
@@ -77,7 +77,7 @@ def test_argmin_bench(shape: tuple, dtype: torch.dtype, extra: dict) -> None:
     workload = ArgminTest(shape, dtype)
     inputs = workload.gen_inputs()
 
-    op = ArgminFwdOp(dtype=dtype, **extra)
+    op = ArgminFwdOp(**extra)
     bm = ManifestBenchmark(_ARGMIN_OP, op, workload)
     # FIXME(staged-rollout): ArgreduceKernel skips large-N manifest workloads
     #
