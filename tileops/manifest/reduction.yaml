@@ -111,7 +111,7 @@ LogSumExpFwdOp:
 
   signature:
     inputs:
-      x: {dtype: "float16 | bfloat16"}
+      x: {dtype: "float16 | bfloat16 | float32"}
     outputs:
       output: {dtype: "same_as(x)"}
     params:
