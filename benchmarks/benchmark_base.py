@@ -7,7 +7,6 @@ import subprocess
 import sys
 import threading
 from abc import ABC, abstractmethod
-from collections import Counter
 from datetime import datetime
 from typing import (
     Any,
@@ -161,6 +160,22 @@ _CALLBACKS_REGISTERED = False
 _BUFFER_BYTES = 8 * 1024 * 1024
 _BUFFER_ALIGN = 8
 _RECORDS: list[dict[str, Any]] = []
+# correlation id of a CUDA API call -> the external id in force when it was made.
+_EXTERNAL_IDS: dict[int, int] = {}
+
+# Activity kinds arrive as their numeric value; comparing against the enum member per
+# record costs more than the callback can afford.
+_CONCURRENT_KERNEL_KIND = 10
+_EXTERNAL_CORRELATION_KIND = 39
+
+# Two regions per iteration, so a kernel says which it belongs to by parity: preparing
+# the call (input rotation, L2 flush) is even, the call itself odd.
+_PREPARE = 0
+_OPERATOR = 1
+
+
+def _region_id(repeat: int, region: int) -> int:
+    return 2 * repeat + region
 
 
 class CUPTIError(RuntimeError):
@@ -176,7 +191,7 @@ def _load_cupti():
     except Exception as exc:  # noqa: BLE001
         raise CUPTIError(
             "cupti-python is unavailable. Install it with "
-            "`pip install --no-deps cupti-python==12.8.0`; --no-deps is required "
+            "`pip install --no-deps cupti-python==13.2.0`; --no-deps is required "
             "or it downgrades torch's cuda-bindings pin."
         ) from exc
     _CUPTI = cupti
@@ -192,27 +207,54 @@ def _buffer_completed(records) -> None:
     # accessors misread a newer libcupti's struct and raise, including from
     # __del__ at shutdown.
     for record in records:
+        if int(record.kind) == _EXTERNAL_CORRELATION_KIND:
+            # Which caller-defined region the API call belonged to. The API record
+            # itself is of no interest; this pairing is the whole reason to enable it.
+            _EXTERNAL_IDS[int(record.correlation_id)] = int(record.external_id)
+            continue
+        if int(record.kind) != _CONCURRENT_KERNEL_KIND:
+            continue
         _RECORDS.append({
-            "kind": "kernel",
             "name": str(record.name),
             "start_ns": int(record.start),
             "end_ns": int(record.end),
+            "correlation_id": int(record.correlation_id),
         })
+
+
+def _activity_kinds(cupti):
+    """The kinds one session enables, and why each is needed.
+
+    A kernel record names the CUDA API call that launched it, and an external
+    correlation record names the region that call was made from; neither half alone
+    says which iteration a kernel belongs to. torch launches through the runtime API
+    and TileLang through the driver API, so both API kinds are enabled or one of the
+    two layers goes unattributed.
+    """
+    return (
+        cupti.ActivityKind.CONCURRENT_KERNEL,
+        cupti.ActivityKind.RUNTIME,
+        cupti.ActivityKind.DRIVER,
+        cupti.ActivityKind.EXTERNAL_CORRELATION,
+    )
 
 
 @contextlib.contextmanager
 def _phase_session():
-    """Own one session, so a discovery mismatch leaves nothing for timing."""
+    """Own one session, so a failed trial leaves nothing behind for the next."""
     global _COLLECTOR_ACTIVE, _CALLBACKS_REGISTERED
     if _COLLECTOR_ACTIVE:
         raise RuntimeError("CUPTI collector is already active")
     cupti = _load_cupti()
+    kinds = _activity_kinds(cupti)
     try:
         if not _CALLBACKS_REGISTERED:
             cupti.activity_register_callbacks(_buffer_requested, _buffer_completed)
             _CALLBACKS_REGISTERED = True
         _RECORDS.clear()
-        cupti.activity_enable(cupti.ActivityKind.CONCURRENT_KERNEL)
+        _EXTERNAL_IDS.clear()
+        for kind in kinds:
+            cupti.activity_enable(kind)
     except Exception as exc:  # noqa: BLE001
         raise CUPTIError(f"CUPTI collector failed to start: {exc}") from exc
     _COLLECTOR_ACTIVE = True
@@ -221,9 +263,22 @@ def _phase_session():
     finally:
         _COLLECTOR_ACTIVE = False
         try:
-            cupti.activity_disable(cupti.ActivityKind.CONCURRENT_KERNEL)
+            for kind in kinds:
+                cupti.activity_disable(kind)
         except Exception as exc:  # noqa: BLE001
             raise CUPTIError(f"CUPTI collector failed to stop: {exc}") from exc
+
+
+@contextlib.contextmanager
+def _region(external_id: int):
+    """Tag every CUDA API call made in this block with *external_id*."""
+    cupti = _load_cupti()
+    kind = cupti.ExternalCorrelationKind.CUSTOM2  # CUSTOM0/1 are Kineto's
+    cupti.activity_push_external_correlation_id(kind, external_id)
+    try:
+        yield
+    finally:
+        cupti.activity_pop_external_correlation_id(kind)
 
 
 def _flush() -> list[dict[str, Any]]:
@@ -239,99 +294,19 @@ def _flush() -> list[dict[str, Any]]:
     return drained
 
 
-def collect_discovery(
-    run_one: Callable[[int], None],
-    n_repeat: int,
-    prepare_one: Callable[[int], None],
-) -> tuple[list[list[dict[str, Any]]], list[list[dict[str, Any]]]]:
-    """Capture prepare and operator activity separately, untimed."""
-    prepare_traces, operator_traces = [], []
-    with _phase_session():
-        for i in range(n_repeat):
-            prepare_one(i)
-            prepare_traces.append(_flush())
-            run_one(i)
-            operator_traces.append(_flush())
-    return prepare_traces, operator_traces
-
-
 def collect_repeats(
     run_one: Callable[[int], None],
     n_repeat: int,
-    prepare_one: Callable[[int], None] | None = None,
-) -> list[dict[str, Any]]:
-    """Capture a complete timed trial as one ordered activity-record range."""
+    prepare_one: Callable[[int], None],
+) -> tuple[list[dict[str, Any]], dict[int, int]]:
+    """Run the timed repeats, tagging each region so its activity is identifiable."""
     with _phase_session():
         for i in range(n_repeat):
-            if prepare_one is not None:
+            with _region(_region_id(i, _PREPARE)):
                 prepare_one(i)
-            run_one(i)
-        return _flush()
-
-
-def _activity_identity(activity: dict) -> str:
-    """Return a stable identity for a timed GPU activity."""
-    kind = activity["kind"]
-    if kind == "memcpy":
-        return f"memcpy:{int(activity['copy_kind'])}:{int(activity['bytes'])}"
-    if kind == "memset":
-        return f"memset:{int(activity['bytes'])}:{int(activity['value'])}"
-    return f"kernel:{activity['name']}"
-
-
-def _kernel_sequence(kernels: list[dict]) -> tuple[str, ...]:
-    return tuple(_activity_identity(activity) for activity in kernels)
-
-
-def _select_expected_sequence(
-    kernels: list[dict],
-    expected_sequence: tuple[str, ...],
-) -> list[dict] | None:
-    """Select a complete discovered kernel sequence from one logical call.
-
-    Every kernel activity attributed to the call must belong to the discovered
-    sequence. Silently discarding an unknown activity could underestimate the
-    call when a dynamic path launches an extra kernel before or after the
-    expected sequence.
-    """
-    if not expected_sequence:
-        return None
-
-    expected_count = len(expected_sequence)
-    if len(kernels) != expected_count:
-        return None
-
-    actual_sequence = _kernel_sequence(kernels)
-    if actual_sequence == expected_sequence:
-        return kernels
-    if Counter(actual_sequence) != Counter(expected_sequence):
-        return None
-
-    # CUPTI may publish concurrently executing kernels in either start-time
-    # order. Accept an inversion only when the two activities overlap; a
-    # reordered serial launch is a real sequence change and must fail closed.
-    expected_positions: dict[str, list[int]] = {}
-    for position, name in enumerate(expected_sequence):
-        expected_positions.setdefault(name, []).append(position)
-    seen: Counter[str] = Counter()
-    actual_to_expected = []
-    for name in actual_sequence:
-        occurrence = seen[name]
-        actual_to_expected.append(expected_positions[name][occurrence])
-        seen[name] += 1
-
-    for left in range(expected_count):
-        for right in range(left + 1, expected_count):
-            if actual_to_expected[left] <= actual_to_expected[right]:
-                continue
-            left_kernel = kernels[left]
-            right_kernel = kernels[right]
-            if (
-                int(left_kernel["end_ns"]) <= int(right_kernel["start_ns"])
-                or int(right_kernel["end_ns"]) <= int(left_kernel["start_ns"])
-            ):
-                return None
-    return kernels
+            with _region(_region_id(i, _OPERATOR)):
+                run_one(i)
+        return _flush(), dict(_EXTERNAL_IDS)
 
 
 def _kernel_span_us(kernels: list[dict]) -> float:
@@ -342,18 +317,12 @@ def _kernel_span_us(kernels: list[dict]) -> float:
     return (end_ns - start_ns) / 1000.0
 
 
-def _format_sequence(seq: tuple[str, ...], limit: int = 8) -> str:
-    """Render an activity sequence for an error message.
-
-    An observed timing sequence spans every repeat, so cap the entry count as
-    well as each mangled kernel name.
-    """
-    if not seq:
-        return "<empty>"
-    names = [name if len(name) <= 96 else name[:93] + "..." for name in seq[:limit]]
-    if len(seq) > limit:
-        names.append(f"...(+{len(seq) - limit} more)")
-    return " -> ".join(names)
+def _format_names(names: list[str], limit: int = 8) -> str:
+    """Render kernel names for an error message, capped in count and in length."""
+    shown = [n if len(n) <= 96 else n[:93] + "..." for n in names[:limit]]
+    if len(names) > limit:
+        shown.append(f"...(+{len(names) - limit} more)")
+    return ", ".join(shown)
 
 
 def _ordered_trace_kernels(records: list[dict]) -> list[dict]:
@@ -363,91 +332,58 @@ def _ordered_trace_kernels(records: list[dict]) -> list[dict]:
     )
 
 
-def _stable_discovery_sequence(traces: list[list[dict]], phase: str) -> tuple[str, ...]:
-    groups = [_ordered_trace_kernels(records) for records in traces]
-    sequences = [_kernel_sequence(kernels) for kernels in groups]
-    if not sequences or any(not sequence for sequence in sequences):
-        raise _CUPTIAttributionError(
-            f"CUPTI discovery found no CUDA kernel sequence for {phase}"
-        )
-    expected = sequences[0]
-    if any(
-        _select_expected_sequence(kernels, expected) is None
-        for kernels in groups[1:]
-    ):
-        rendered = "; ".join(_format_sequence(sequence) for sequence in sequences)
-        raise _CUPTIAttributionError(
-            f"CUPTI discovery saw inconsistent {phase} sequences: {rendered}"
-        )
-    return expected
-
-
-def _discovery_repeats() -> int:
-    return int(os.getenv("TILEOPS_CUPTI_DISCOVERY_REPEATS", "3"))
-
-
 def _cuda_events_fallback_enabled() -> bool:
     return os.getenv("TILEOPS_ALLOW_CUDA_EVENTS_FALLBACK", "0") == "1"
 
 
-def _discover_expected_sequences(
-    run_one: Callable[[int], None],
-    prepare_one: Callable[[int], None],
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    prepare_traces, operator_traces = collect_discovery(
-        run_one,
-        _discovery_repeats(),
-        prepare_one,
-    )
-    return (
-        _stable_discovery_sequence(prepare_traces, "prepare"),
-        _stable_discovery_sequence(operator_traces, "operator"),
-    )
-
-
 def _attributed_latency_samples_ms(
     records: list[dict],
-    expected_sequence: tuple[str, ...],
+    external_ids: dict[int, int],
     n_repeat: int,
-    expected_prepare_sequence: tuple[str, ...] = (),
 ) -> list[float]:
-    samples_us: list[float] = []
-    kernels = _ordered_trace_kernels(records)
-    prepare_count = len(expected_prepare_sequence)
-    operator_count = len(expected_sequence)
-    cycle_count = prepare_count + operator_count
-    expected_total = n_repeat * cycle_count
+    """Return each iteration's operator latency, in milliseconds.
 
-    if cycle_count == 0 or len(kernels) != expected_total:
-        raise _CUPTIAttributionError(
-            "CUPTI timing activity count does not match the deterministic "
-            f"op-sequence ledger: got {len(kernels)}, expected {expected_total} "
-            f"({n_repeat} x ({prepare_count} prepare + {operator_count} operator)); "
-            f"prepare=[{_format_sequence(expected_prepare_sequence)}]; "
-            f"operator=[{_format_sequence(expected_sequence)}]; "
-            f"observed=[{_format_sequence(_kernel_sequence(kernels))}]"
-        )
+    A kernel record carries the correlation id of the CUDA API call that launched it,
+    and *external_ids* maps that id to the region the call was made from. Grouping by
+    region is the whole of the attribution: nothing is inferred from the order or the
+    identity of what ran, so a call whose kernel count varies between iterations is
+    measured rather than rejected.
 
-    for repeat in range(n_repeat):
-        begin = repeat * cycle_count
-        prepare = kernels[begin:begin + prepare_count]
-        operator = kernels[begin + prepare_count:begin + cycle_count]
-        prepare_ok = (
-            not expected_prepare_sequence
-            or _select_expected_sequence(prepare, expected_prepare_sequence) is not None
-        )
-        selected = _select_expected_sequence(operator, expected_sequence)
-        if not prepare_ok or selected is None:
+    Raises:
+        _CUPTIAttributionError: A kernel belongs to no region, or an iteration
+            produced no operator activity. Either means the trial cannot be read as
+            ``n_repeat`` measurements of the same call.
+    """
+    by_region: dict[int, list[dict]] = {}
+    untagged: list[str] = []
+    for kernel in records:
+        external_id = external_ids.get(kernel["correlation_id"])
+        if external_id is None:
+            untagged.append(kernel["name"])
             continue
-        samples_us.append(_kernel_span_us(selected))
+        by_region.setdefault(external_id, []).append(kernel)
 
-    if len(samples_us) != n_repeat:
+    if untagged:
         raise _CUPTIAttributionError(
-            f"CUPTI timing attributed {len(samples_us)}/{n_repeat} complete "
-            f"expected kernel sequences; kernels={len(kernels)}; "
-            f"prepare=[{_format_sequence(expected_prepare_sequence)}]; "
-            f"operator=[{_format_sequence(expected_sequence)}]; "
-            f"observed=[{_format_sequence(_kernel_sequence(kernels))}]"
+            f"{len(untagged)} of {len(records)} CUPTI kernel records belong to no timed "
+            f"region, so the trial is missing activity it cannot account for: "
+            f"{_format_names(untagged)}"
+        )
+
+    samples_us = []
+    empty = []
+    for repeat in range(n_repeat):
+        operator = by_region.get(_region_id(repeat, _OPERATOR))
+        if not operator:
+            empty.append(repeat)
+            continue
+        samples_us.append(_kernel_span_us(operator))
+
+    if empty:
+        raise _CUPTIAttributionError(
+            f"{len(empty)} of {n_repeat} timed iterations launched no CUDA kernel "
+            f"(first: iteration {empty[0]}); a call that reaches the GPU in none of "
+            f"them is not being measured"
         )
     return [sample_us * 1e-3 for sample_us in samples_us]
 
@@ -585,7 +521,9 @@ def bench_kernel(
     n_repeat = _clamp_iters(repeat_ms / per_iter_ms)
 
     if args:
-        total = 1 + n_warmup + _discovery_repeats() + n_repeat
+        # One calibration call, the warmups, the timed repeats, and -- when the fallback
+        # is allowed -- the repeats it would run after CUPTI failed.
+        total = 1 + n_warmup + n_repeat
         if allow_fallback:
             total += n_repeat
         seed = int(os.getenv("TILEOPS_INPUT_POOL_SEED", "0"))
@@ -622,10 +560,8 @@ def bench_kernel(
 
     try:
         with _native_output_suppressor():
-            prepare_seq, operator_seq = _discover_expected_sequences(_run, _prepare_iteration)
-            records = collect_repeats(_run, n_repeat, prepare_one=_prepare_iteration)
-            samples = _attributed_latency_samples_ms(
-                records, operator_seq, n_repeat, prepare_seq)
+            records, external_ids = collect_repeats(_run, n_repeat, _prepare_iteration)
+            samples = _attributed_latency_samples_ms(records, external_ids, n_repeat)
         _bench_meta.timing = "cupti"
     except (_CUPTIAttributionError, CUPTIError) as exc:
         if not allow_fallback:

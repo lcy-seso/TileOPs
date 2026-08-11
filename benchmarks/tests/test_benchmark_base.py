@@ -48,104 +48,88 @@ def test_multi_input_op_raises_keyerror():
         workloads_to_params("GroupedQueryAttentionFwdOp")
 
 
-def _kernel(name: str, start_ns: int, end_ns: int) -> dict:
-    return {"kind": "kernel", "name": name, "start_ns": start_ns, "end_ns": end_ns}
+def _kernel(name: str, start_ns: int, end_ns: int, correlation_id: int) -> dict:
+    return {
+        "name": name,
+        "start_ns": start_ns,
+        "end_ns": end_ns,
+        "correlation_id": correlation_id,
+    }
 
 
-def _seq(*names: str) -> tuple[str, ...]:
-    """Discovered sequences hold activity identities, not bare kernel names."""
-    return tuple(f"kernel:{name}" for name in names)
+def _regions(*assignments: tuple[int, int]) -> dict[int, int]:
+    """Map correlation id -> region id, as CUPTI's external correlation records do."""
+    return dict(assignments)
 
 
 def test_attribution_excludes_prepare_and_keeps_the_operator_gap():
+    """Prepare activity is identified by its region, not by where it sits."""
     records = [
-        _kernel("copy", 1_000, 2_000),
-        _kernel("fill", 2_100, 3_000),
-        _kernel("op-a", 4_000, 6_000),
-        _kernel("op-b", 9_000, 10_000),
-        _kernel("copy", 20_000, 21_000),
-        _kernel("fill", 21_100, 22_000),
-        _kernel("op-a", 23_000, 24_000),
-        _kernel("op-b", 29_000, 31_000),
+        _kernel("copy", 1_000, 2_000, 1),
+        _kernel("fill", 2_100, 3_000, 2),
+        _kernel("op-a", 4_000, 6_000, 3),
+        _kernel("op-b", 9_000, 10_000, 4),
+        _kernel("copy", 20_000, 21_000, 5),
+        _kernel("op-a", 23_000, 24_000, 6),
+        _kernel("op-b", 29_000, 31_000, 7),
     ]
+    # Iteration 0 prepares under region 0 and runs under 1; iteration 1 under 2 and 3.
+    external_ids = _regions((1, 0), (2, 0), (3, 1), (4, 1), (5, 2), (6, 3), (7, 3))
 
-    samples_ms = _attributed_latency_samples_ms(
-        records,
-        _seq("op-a", "op-b"),
-        n_repeat=2,
-        expected_prepare_sequence=_seq("copy", "fill"),
-    )
+    samples_ms = _attributed_latency_samples_ms(records, external_ids, n_repeat=2)
 
-    # Operator envelopes are 6 us and 8 us. Prepare kernels are validated but
-    # excluded, while the 3/5 us inter-kernel gaps remain part of op latency.
+    # Operator envelopes are 6 us and 8 us; the 3/5 us inter-kernel gaps stay inside
+    # the call, and iteration 1 preparing with one kernel instead of two changes
+    # nothing -- the count is never assumed.
     assert samples_ms == pytest.approx([0.006, 0.008])
 
 
-@pytest.mark.parametrize(
-    "kernels, expected_sequence",
-    [
-        # CUPTI may publish two concurrent kernels in either start-time order.
-        ([_kernel("b", 1_000, 3_000), _kernel("a", 1_500, 2_500)], _seq("a", "b")),
-        # A repeated kernel name is matched by occurrence, not by identity.
-        (
-            [
-                _kernel("a", 1_000, 2_000),
-                _kernel("b", 1_500, 3_000),
-                _kernel("a", 2_000, 2_500),
-            ],
-            _seq("a", "a", "b"),
-        ),
-    ],
-)
-def test_attribution_accepts_overlapping_activities_in_either_order(
-    kernels, expected_sequence,
-):
+def test_attribution_measures_a_call_whose_kernel_count_varies():
+    """A dynamic path launching an extra kernel is measured, not rejected."""
+    records = [
+        _kernel("op", 1_000, 2_000, 1),
+        _kernel("op", 10_000, 11_000, 2),
+        _kernel("op-extra", 11_500, 13_000, 3),
+    ]
+    external_ids = _regions((1, 1), (2, 3), (3, 3))
+
+    samples_ms = _attributed_latency_samples_ms(records, external_ids, n_repeat=2)
+
+    assert samples_ms == pytest.approx([0.001, 0.003])
+
+
+def test_attribution_ignores_publication_order():
+    """Records arrive in either start-time order; the span is the same either way."""
+    records = [
+        _kernel("b", 1_500, 3_000, 2),
+        _kernel("a", 1_000, 2_500, 1),
+    ]
     samples_ms = _attributed_latency_samples_ms(
-        kernels, expected_sequence, n_repeat=1,
+        records, _regions((1, 1), (2, 1)), n_repeat=1,
     )
     assert samples_ms == pytest.approx([0.002])
 
 
 @pytest.mark.parametrize(
-    "records, expected_sequence, message",
+    "records, external_ids, message",
     [
-        # One activity short of the discovered sequence. A CUPTI record dropped
-        # for want of buffer space lands here too: the count stops matching.
+        # A kernel no region claims: activity the trial cannot account for.
         (
-            [_kernel("a", 1_000, 2_000)],
-            _seq("a", "b"),
-            "activity count does not match",
+            [_kernel("a", 1_000, 2_000, 1), _kernel("stray", 2_000, 3_000, 99)],
+            _regions((1, 1)),
+            "belong to no timed region.*stray",
         ),
-        # A dynamic path launched an extra kernel.
+        # An iteration whose call never reached the GPU.
         (
-            [
-                _kernel("a", 1_000, 2_000),
-                _kernel("b", 2_000, 3_000),
-                _kernel("extra", 3_000, 4_000),
-            ],
-            _seq("a", "b"),
-            # The observed sequence names the unexpected activity, so a CI
-            # abort is diagnosable from the log alone.
-            r"activity count does not match.*observed=.*kernel:extra",
-        ),
-        # Right count, different kernels.
-        (
-            [_kernel("a", 1_000, 2_000), _kernel("a", 2_000, 3_000)],
-            _seq("a", "b"),
-            "attributed 0/1",
-        ),
-        # Serially reordered kernels are a real sequence change, not a
-        # publication-order artifact.
-        (
-            [_kernel("b", 1_000, 2_000), _kernel("a", 2_000, 3_000)],
-            _seq("a", "b"),
-            "attributed 0/1",
+            [_kernel("a", 1_000, 2_000, 1)],
+            _regions((1, 1)),
+            "launched no CUDA kernel",
         ),
     ],
 )
-def test_attribution_fails_closed(records, expected_sequence, message):
+def test_attribution_fails_closed(records, external_ids, message):
     with pytest.raises(_CUPTIAttributionError, match=message):
-        _attributed_latency_samples_ms(records, expected_sequence, n_repeat=1)
+        _attributed_latency_samples_ms(records, external_ids, n_repeat=2)
 
 
 def test_shifting_tensor_pool_preserves_layout_values_and_alignment():
