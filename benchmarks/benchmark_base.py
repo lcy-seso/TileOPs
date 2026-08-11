@@ -162,20 +162,14 @@ _BUFFER_ALIGN = 8
 _RECORDS: list[dict[str, Any]] = []
 # correlation id of a CUDA API call -> the external id in force when it was made.
 _EXTERNAL_IDS: dict[int, int] = {}
+# A record's kind arrives as its numeric value; resolving the enum per record costs more
+# than the callback can afford. Filled by _load_cupti.
+_KERNEL_KIND = -1
+_EXTERNAL_KIND = -1
 
-# Activity kinds arrive as their numeric value; comparing against the enum member per
-# record costs more than the callback can afford.
-_CONCURRENT_KERNEL_KIND = 10
-_EXTERNAL_CORRELATION_KIND = 39
-
-# Two regions per iteration, so a kernel says which it belongs to by parity: preparing
-# the call (input rotation, L2 flush) is even, the call itself odd.
-_PREPARE = 0
-_OPERATOR = 1
-
-
-def _region_id(repeat: int, region: int) -> int:
-    return 2 * repeat + region
+# Preparing a call (input rotation, L2 flush) is region 0 whichever iteration it belongs
+# to -- its activity is only ever excluded. Iteration i's call is region i + 1.
+_PREPARE_REGION = 0
 
 
 class CUPTIError(RuntimeError):
@@ -194,6 +188,9 @@ def _load_cupti():
             "`pip install --no-deps cupti-python==13.2.0`; --no-deps is required "
             "or it downgrades torch's cuda-bindings pin."
         ) from exc
+    global _KERNEL_KIND, _EXTERNAL_KIND
+    _KERNEL_KIND = int(cupti.ActivityKind.CONCURRENT_KERNEL)
+    _EXTERNAL_KIND = int(cupti.ActivityKind.EXTERNAL_CORRELATION)
     _CUPTI = cupti
     return _CUPTI
 
@@ -207,12 +204,10 @@ def _buffer_completed(records) -> None:
     # accessors misread a newer libcupti's struct and raise, including from
     # __del__ at shutdown.
     for record in records:
-        if int(record.kind) == _EXTERNAL_CORRELATION_KIND:
-            # Which caller-defined region the API call belonged to. The API record
-            # itself is of no interest; this pairing is the whole reason to enable it.
+        if int(record.kind) == _EXTERNAL_KIND:
             _EXTERNAL_IDS[int(record.correlation_id)] = int(record.external_id)
             continue
-        if int(record.kind) != _CONCURRENT_KERNEL_KIND:
+        if int(record.kind) != _KERNEL_KIND:
             continue
         _RECORDS.append({
             "name": str(record.name),
@@ -222,23 +217,6 @@ def _buffer_completed(records) -> None:
         })
 
 
-def _activity_kinds(cupti):
-    """The kinds one session enables, and why each is needed.
-
-    A kernel record names the CUDA API call that launched it, and an external
-    correlation record names the region that call was made from; neither half alone
-    says which iteration a kernel belongs to. torch launches through the runtime API
-    and TileLang through the driver API, so both API kinds are enabled or one of the
-    two layers goes unattributed.
-    """
-    return (
-        cupti.ActivityKind.CONCURRENT_KERNEL,
-        cupti.ActivityKind.RUNTIME,
-        cupti.ActivityKind.DRIVER,
-        cupti.ActivityKind.EXTERNAL_CORRELATION,
-    )
-
-
 @contextlib.contextmanager
 def _phase_session():
     """Own one session, so a failed trial leaves nothing behind for the next."""
@@ -246,7 +224,16 @@ def _phase_session():
     if _COLLECTOR_ACTIVE:
         raise RuntimeError("CUPTI collector is already active")
     cupti = _load_cupti()
-    kinds = _activity_kinds(cupti)
+    # A kernel record names the API call that launched it, an external correlation
+    # record names the region that call came from; neither half alone says which
+    # iteration a kernel belongs to. torch launches through the runtime API and
+    # TileLang through the driver API, so both or one layer goes unattributed.
+    kinds = (
+        cupti.ActivityKind.CONCURRENT_KERNEL,
+        cupti.ActivityKind.RUNTIME,
+        cupti.ActivityKind.DRIVER,
+        cupti.ActivityKind.EXTERNAL_CORRELATION,
+    )
     try:
         if not _CALLBACKS_REGISTERED:
             cupti.activity_register_callbacks(_buffer_requested, _buffer_completed)
@@ -302,9 +289,9 @@ def collect_repeats(
     """Run the timed repeats, tagging each region so its activity is identifiable."""
     with _phase_session():
         for i in range(n_repeat):
-            with _region(_region_id(i, _PREPARE)):
+            with _region(_PREPARE_REGION):
                 prepare_one(i)
-            with _region(_region_id(i, _OPERATOR)):
+            with _region(i + 1):
                 run_one(i)
         return _flush(), dict(_EXTERNAL_IDS)
 
@@ -315,14 +302,6 @@ def _kernel_span_us(kernels: list[dict]) -> float:
     start_ns = min(int(kernel["start_ns"]) for kernel in kernels)
     end_ns = max(int(kernel["end_ns"]) for kernel in kernels)
     return (end_ns - start_ns) / 1000.0
-
-
-def _format_names(names: list[str], limit: int = 8) -> str:
-    """Render kernel names for an error message, capped in count and in length."""
-    shown = [n if len(n) <= 96 else n[:93] + "..." for n in names[:limit]]
-    if len(names) > limit:
-        shown.append(f"...(+{len(names) - limit} more)")
-    return ", ".join(shown)
 
 
 def _ordered_trace_kernels(records: list[dict]) -> list[dict]:
@@ -343,16 +322,9 @@ def _attributed_latency_samples_ms(
 ) -> list[float]:
     """Return each iteration's operator latency, in milliseconds.
 
-    A kernel record carries the correlation id of the CUDA API call that launched it,
-    and *external_ids* maps that id to the region the call was made from. Grouping by
-    region is the whole of the attribution: nothing is inferred from the order or the
-    identity of what ran, so a call whose kernel count varies between iterations is
-    measured rather than rejected.
-
-    Raises:
-        _CUPTIAttributionError: A kernel belongs to no region, or an iteration
-            produced no operator activity. Either means the trial cannot be read as
-            ``n_repeat`` measurements of the same call.
+    Grouping by region is the whole of the attribution: nothing is inferred from the
+    order or the identity of what ran, so a call whose kernel count varies between
+    iterations is measured rather than rejected.
     """
     by_region: dict[int, list[dict]] = {}
     untagged: list[str] = []
@@ -367,13 +339,13 @@ def _attributed_latency_samples_ms(
         raise _CUPTIAttributionError(
             f"{len(untagged)} of {len(records)} CUPTI kernel records belong to no timed "
             f"region, so the trial is missing activity it cannot account for: "
-            f"{_format_names(untagged)}"
+            f"{', '.join(sorted(set(untagged))[:4])}"
         )
 
     samples_us = []
     empty = []
     for repeat in range(n_repeat):
-        operator = by_region.get(_region_id(repeat, _OPERATOR))
+        operator = by_region.get(repeat + 1)
         if not operator:
             empty.append(repeat)
             continue
@@ -521,8 +493,6 @@ def bench_kernel(
     n_repeat = _clamp_iters(repeat_ms / per_iter_ms)
 
     if args:
-        # One calibration call, the warmups, the timed repeats, and -- when the fallback
-        # is allowed -- the repeats it would run after CUPTI failed.
         total = 1 + n_warmup + n_repeat
         if allow_fallback:
             total += n_repeat

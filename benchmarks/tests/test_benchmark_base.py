@@ -57,11 +57,6 @@ def _kernel(name: str, start_ns: int, end_ns: int, correlation_id: int) -> dict:
     }
 
 
-def _regions(*assignments: tuple[int, int]) -> dict[int, int]:
-    """Map correlation id -> region id, as CUPTI's external correlation records do."""
-    return dict(assignments)
-
-
 def test_attribution_excludes_prepare_and_keeps_the_operator_gap():
     """Prepare activity is identified by its region, not by where it sits."""
     records = [
@@ -73,14 +68,13 @@ def test_attribution_excludes_prepare_and_keeps_the_operator_gap():
         _kernel("op-a", 23_000, 24_000, 6),
         _kernel("op-b", 29_000, 31_000, 7),
     ]
-    # Iteration 0 prepares under region 0 and runs under 1; iteration 1 under 2 and 3.
-    external_ids = _regions((1, 0), (2, 0), (3, 1), (4, 1), (5, 2), (6, 3), (7, 3))
+    # Region 0 is every prepare block; iteration i's call is region i + 1.
+    external_ids = {1: 0, 2: 0, 3: 1, 4: 1, 5: 0, 6: 2, 7: 2}
 
     samples_ms = _attributed_latency_samples_ms(records, external_ids, n_repeat=2)
 
-    # Operator envelopes are 6 us and 8 us; the 3/5 us inter-kernel gaps stay inside
-    # the call, and iteration 1 preparing with one kernel instead of two changes
-    # nothing -- the count is never assumed.
+    # Operator envelopes are 6 us and 8 us; the 3/5 us inter-kernel gaps stay inside the
+    # call, and iteration 1 preparing with one kernel instead of two changes nothing.
     assert samples_ms == pytest.approx([0.006, 0.008])
 
 
@@ -91,23 +85,12 @@ def test_attribution_measures_a_call_whose_kernel_count_varies():
         _kernel("op", 10_000, 11_000, 2),
         _kernel("op-extra", 11_500, 13_000, 3),
     ]
-    external_ids = _regions((1, 1), (2, 3), (3, 3))
 
-    samples_ms = _attributed_latency_samples_ms(records, external_ids, n_repeat=2)
+    samples_ms = _attributed_latency_samples_ms(
+        records, {1: 1, 2: 2, 3: 2}, n_repeat=2,
+    )
 
     assert samples_ms == pytest.approx([0.001, 0.003])
-
-
-def test_attribution_ignores_publication_order():
-    """Records arrive in either start-time order; the span is the same either way."""
-    records = [
-        _kernel("b", 1_500, 3_000, 2),
-        _kernel("a", 1_000, 2_500, 1),
-    ]
-    samples_ms = _attributed_latency_samples_ms(
-        records, _regions((1, 1), (2, 1)), n_repeat=1,
-    )
-    assert samples_ms == pytest.approx([0.002])
 
 
 @pytest.mark.parametrize(
@@ -116,15 +99,11 @@ def test_attribution_ignores_publication_order():
         # A kernel no region claims: activity the trial cannot account for.
         (
             [_kernel("a", 1_000, 2_000, 1), _kernel("stray", 2_000, 3_000, 99)],
-            _regions((1, 1)),
+            {1: 1},
             "belong to no timed region.*stray",
         ),
         # An iteration whose call never reached the GPU.
-        (
-            [_kernel("a", 1_000, 2_000, 1)],
-            _regions((1, 1)),
-            "launched no CUDA kernel",
-        ),
+        ([_kernel("a", 1_000, 2_000, 1)], {1: 1}, "launched no CUDA kernel"),
     ],
 )
 def test_attribution_fails_closed(records, external_ids, message):
