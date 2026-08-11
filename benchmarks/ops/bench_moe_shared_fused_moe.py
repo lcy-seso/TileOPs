@@ -93,14 +93,16 @@ class SharedFusedMoEBenchmark(BenchmarkBase[SharedFusedMoeWorkload]):
     def calculate_memory(self) -> Optional[float]:
         t = self.workload
         elem = 2  # bf16 = 2 bytes
-        routed_w = (
-            t.num_experts * 2 * t.ffn_size * t.hidden_size
-            + t.num_experts * t.hidden_size * t.ffn_size
-        ) * elem
-        shared_w = (
-            2 * t.shared_ffn_size * t.hidden_size
-            + t.hidden_size * t.shared_ffn_size
-        ) * elem
+        # A call reads only the experts its tokens routed to. With T tokens each picking
+        # K of E, and this workload drawing gating at random, the expected number of
+        # distinct experts is E * (1 - (1 - K/E)^T): K of them at T=1, all E once T*K
+        # covers the pool. Counting all E regardless is right in the prefill limit and
+        # overstates decode traffic by E/K -- 48x on the Kimi K2 config below.
+        touched = t.num_experts * (
+            1.0 - (1.0 - t.top_k / t.num_experts) ** t.num_tokens
+        )
+        routed_w = touched * 3 * t.ffn_size * t.hidden_size * elem
+        shared_w = 3 * t.shared_ffn_size * t.hidden_size * elem
         act = t.num_tokens * t.hidden_size * elem * 2
         return routed_w + shared_w + act
 
