@@ -7,12 +7,11 @@ any duck-typed workload rather than requiring ``WorkloadBase`` inheritance.
 import pytest
 import torch
 
-from benchmarks.base import (
+from benchmarks.base import workloads_to_params
+from benchmarks.timing import (
     _attributed_latency_samples_ms,
     _CUPTIAttributionError,
-    _ShiftingTensorPool,
     bench_kernel,
-    workloads_to_params,
 )
 
 # Duck-typed test workloads
@@ -109,30 +108,6 @@ def test_attribution_measures_a_call_whose_kernel_count_varies():
 def test_attribution_fails_closed(records, external_ids, message):
     with pytest.raises(_CUPTIAttributionError, match=message):
         _attributed_latency_samples_ms(records, external_ids, n_repeat=2)
-
-
-def test_shifting_tensor_pool_preserves_layout_values_and_alignment():
-    source = torch.arange(24, dtype=torch.float32).reshape(4, 6).T
-    pool = _ShiftingTensorPool((source, 7), total_iterations=3, seed=123)
-    pointers = []
-
-    for _ in range(3):
-        shifted, scalar = pool.next_args()
-        assert scalar == 7
-        assert shifted.stride() == source.stride()
-        torch.testing.assert_close(shifted, source)
-        pointers.append(shifted.data_ptr())
-        shifted.zero_()
-
-    assert len(set(pointers)) == 3
-    assert all(
-        (pointer - pointers[0]) % _ShiftingTensorPool._POOL_ALIGNMENT == 0
-        for pointer in pointers[1:]
-    )
-    expected = torch.arange(24, dtype=torch.float32).reshape(4, 6).T
-    torch.testing.assert_close(source, expected)
-    with pytest.raises(RuntimeError, match="ShiftingTensorPool exhausted"):
-        pool.next_args()
 
 
 @pytest.mark.smoke
