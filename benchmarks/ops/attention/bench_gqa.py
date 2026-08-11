@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch.nn import functional as F
 
-from benchmarks.benchmark_base import BenchmarkBase, BenchmarkReport, ManifestBenchmark
+from benchmarks.base import BenchmarkBase, BenchmarkReport, ManifestBenchmark
 from benchmarks.ops.attention.manifest_params import (
     gqa_prefill_args,
     gqa_prefill_paged_args,

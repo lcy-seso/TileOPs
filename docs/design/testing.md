@@ -4,13 +4,13 @@ Tests and benchmarks are separated by concern: `pytest tests/` validates correct
 
 ## Core Abstractions
 
-| Class              | Location                                                             | Role                                                                                                                                                                                |
-| ------------------ | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WorkloadBase`     | [`workloads/workload_base.py`](../../workloads/workload_base.py)     | ABC defining `gen_inputs()`. Shared base used by both tests and benchmarks; a subclass named for one op also defines that op's `ref_program()`.                                     |
-| `FixtureBase`      | [`workloads/workload_base.py`](../../workloads/workload_base.py)     | Metaclass-based decorator that applies `pytest.mark.parametrize` from a `PARAMS` class attribute or `get_params()` classmethod.                                                     |
-| `TestBase`         | [`tests/test_base.py`](../../tests/test_base.py)                     | Inherits `WorkloadBase`. Declares `ref_program()` abstract and adds `check()`. Each op subclasses this for correctness testing.                                                     |
-| `BenchmarkBase[W]` | [`benchmarks/benchmark_base.py`](../../benchmarks/benchmark_base.py) | Generic ABC parameterized by workload type `W` (a capability protocol, not `WorkloadBase`). Subclass implements `calculate_flops()` and `calculate_memory()`. Provides `profile()`. |
-| `BenchmarkReport`  | [`benchmarks/benchmark_base.py`](../../benchmarks/benchmark_base.py) | Static collector -- `record()` stores results, `dump()` writes markdown, `clear()` resets.                                                                                          |
+| Class              | Location                                                         | Role                                                                                                                                                                                |
+| ------------------ | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WorkloadBase`     | [`workloads/workload_base.py`](../../workloads/workload_base.py) | ABC defining `gen_inputs()`. Shared base used by both tests and benchmarks; a subclass named for one op also defines that op's `ref_program()`.                                     |
+| `FixtureBase`      | [`workloads/workload_base.py`](../../workloads/workload_base.py) | Metaclass-based decorator that applies `pytest.mark.parametrize` from a `PARAMS` class attribute or `get_params()` classmethod.                                                     |
+| `TestBase`         | [`tests/test_base.py`](../../tests/test_base.py)                 | Inherits `WorkloadBase`. Declares `ref_program()` abstract and adds `check()`. Each op subclasses this for correctness testing.                                                     |
+| `BenchmarkBase[W]` | [`benchmarks/base.py`](../../benchmarks/base.py)                 | Generic ABC parameterized by workload type `W` (a capability protocol, not `WorkloadBase`). Subclass implements `calculate_flops()` and `calculate_memory()`. Provides `profile()`. |
+| `BenchmarkReport`  | [`benchmarks/base.py`](../../benchmarks/base.py)                 | Static collector -- `record()` stores results, `dump()` writes markdown, `clear()` resets.                                                                                          |
 
 ## Wiring
 
@@ -113,7 +113,7 @@ python scripts/test_node_delta.py --base origin/release   # different base branc
 
 → Trust boundary: [trust-model.md §Benchmark](trust-model.md#benchmark) | Rules: [benchmark.md](../../.claude/domain-rules/benchmark.md)
 
-**Framework:** `benchmarks.benchmark_base.BenchmarkBase`. **Location:** [`benchmarks/ops/`](../../benchmarks/ops/).
+**Framework:** `benchmarks.base.BenchmarkBase`. **Location:** [`benchmarks/ops/`](../../benchmarks/ops/).
 
 **Execution:** `pytest benchmarks/` auto-generates `profile_run.log` (markdown format).
 

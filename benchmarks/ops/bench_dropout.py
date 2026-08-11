@@ -10,7 +10,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from benchmarks.benchmark_base import BenchmarkReport, ManifestBenchmark, workloads_to_params
+from benchmarks.base import BenchmarkReport, ManifestBenchmark, workloads_to_params
 from tileops.ops.dropout import DropoutOp
 from workloads.elementwise import ShapedRandnWorkload
 

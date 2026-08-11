@@ -51,7 +51,7 @@ import torch
 triton = pytest.importorskip("triton")
 tl = pytest.importorskip("triton.language")
 
-from benchmarks.benchmark_base import BenchmarkBase, BenchmarkReport  # noqa: E402
+from benchmarks.base import BenchmarkBase, BenchmarkReport  # noqa: E402
 from tileops.kernels.grouped_gemm import GroupedGemmPersistent3WGKernel  # noqa: E402
 from workloads.grouped_gemm import GroupedGemmUniformWorkload  # noqa: E402
 

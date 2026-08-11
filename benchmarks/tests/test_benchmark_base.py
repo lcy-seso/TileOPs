@@ -1,4 +1,4 @@
-"""Unit tests for benchmarks.benchmark_base.
+"""Unit tests for benchmarks.base.
 
 Verifies that the generic ``BenchmarkBase`` / ``ManifestBenchmark`` accept
 any duck-typed workload rather than requiring ``WorkloadBase`` inheritance.
@@ -7,7 +7,7 @@ any duck-typed workload rather than requiring ``WorkloadBase`` inheritance.
 import pytest
 import torch
 
-from benchmarks.benchmark_base import (
+from benchmarks.base import (
     _attributed_latency_samples_ms,
     _CUPTIAttributionError,
     _ShiftingTensorPool,

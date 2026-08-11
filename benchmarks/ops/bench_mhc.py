@@ -9,7 +9,7 @@ manifest; roofline FLOP and byte counts come from each op's
 import pytest
 import torch
 
-from benchmarks.benchmark_base import (
+from benchmarks.base import (
     BenchmarkReport,
     ManifestBenchmark,
     workload_field_params,

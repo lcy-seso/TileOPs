@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from benchmarks.benchmark_base import BenchmarkBase, BenchmarkReport
+from benchmarks.base import BenchmarkBase, BenchmarkReport
 from tileops.kernels.moe import SharedExpertMLPKernel
 from workloads.moe import MoeSharedExpertMlpWorkload
 from workloads.workload_base import FixtureBase

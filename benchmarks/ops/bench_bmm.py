@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from benchmarks.benchmark_base import BenchmarkReport, ManifestBenchmark
+from benchmarks.base import BenchmarkReport, ManifestBenchmark
 from tileops.manifest import load_workloads
 from tileops.ops import BmmFp8Op, BmmFwdOp
 from workloads.bmm import BmmFp8Workload, BmmWorkload

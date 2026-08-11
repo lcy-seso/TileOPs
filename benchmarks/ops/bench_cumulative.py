@@ -8,7 +8,7 @@ Workload shapes and roofline formulas are loaded from the ops manifest
 import pytest
 import torch
 
-from benchmarks.benchmark_base import (
+from benchmarks.base import (
     BenchmarkReport,
     ManifestBenchmark,
     workloads_to_params,

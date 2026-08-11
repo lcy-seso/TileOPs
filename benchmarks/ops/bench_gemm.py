@@ -3,7 +3,7 @@ from typing import Any, Callable, Optional
 import pytest
 import torch
 
-from benchmarks.benchmark_base import BenchmarkReport, ManifestBenchmark
+from benchmarks.base import BenchmarkReport, ManifestBenchmark
 from tileops.manifest import load_workloads
 from tileops.ops import GemmFp8Op, GemmOp, GemmW4A16Op
 from workloads.gemm import GemmFp8Workload, GemmW4A16Workload, GemmWorkload
