@@ -2960,7 +2960,7 @@ def _ast_manifest_call_usage(
     Recognises the direct pattern (``load_workloads`` from
     ``tileops.manifest`` called with the op name + ``op.eval_roofline()``)
     and the indirect one (``workloads_to_params`` / ``ManifestBenchmark``
-    from ``benchmarks.base``, op name as first argument).
+    from ``benchmarks.benchmark_base``, op name as first argument).
     """
     # Maps from the indirect helper name → the direct target it satisfies.
     _INDIRECT_EQUIV: dict[str, str] = {
@@ -2978,8 +2978,8 @@ def _ast_manifest_call_usage(
                 for alias in node.names:
                     if alias.name in target_names:
                         imported.add(alias.name)
-            # Indirect helpers live in benchmarks.base.
-            if node.module == "benchmarks.base" and node.names:
+            # Indirect helpers live in benchmarks.benchmark_base.
+            if node.module == "benchmarks.benchmark_base" and node.names:
                 for alias in node.names:
                     equiv = _INDIRECT_EQUIV.get(alias.name)
                     if equiv and equiv in target_names:

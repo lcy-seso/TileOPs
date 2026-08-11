@@ -15,7 +15,7 @@ from typing import Any, Sequence
 import pytest
 import torch
 
-from benchmarks.base import BenchmarkReport, ManifestBenchmark
+from benchmarks.benchmark_base import BenchmarkReport, ManifestBenchmark
 from benchmarks.ops.attention.manifest_params import manifest_params
 from benchmarks.ops.bench_gated_deltanet import (
     compute_w_u_torch,

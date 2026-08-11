@@ -11,7 +11,7 @@ One ``test_*_bench`` per op, so the validator's L4 AST check can tie each
 import pytest
 import torch
 
-from benchmarks.base import (
+from benchmarks.benchmark_base import (
     BenchmarkReport,
     ManifestBenchmark,
     workload_field_params,

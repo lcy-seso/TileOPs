@@ -11,7 +11,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from benchmarks.base import BenchmarkBase, BenchmarkReport, ManifestBenchmark
+from benchmarks.benchmark_base import BenchmarkBase, BenchmarkReport, ManifestBenchmark
 from tileops.manifest import load_workloads
 from tileops.ops.elementwise import (
     AlibiFwdOp,

@@ -1,4 +1,4 @@
-from .base import BenchmarkBase, BenchmarkReport
+from .benchmark_base import BenchmarkBase, BenchmarkReport
 
 __all__ = [
     "BenchmarkBase",

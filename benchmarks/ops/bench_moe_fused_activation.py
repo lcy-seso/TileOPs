@@ -41,7 +41,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from benchmarks.base import BenchmarkBase, BenchmarkReport
+from benchmarks.benchmark_base import BenchmarkBase, BenchmarkReport
 from tileops.ops.moe import FusedMoEExpertsNopadPersistent3WGFwdOp
 from workloads.moe import MoeFusedActivationWorkload
 

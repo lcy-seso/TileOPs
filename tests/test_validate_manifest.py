@@ -2040,7 +2040,7 @@ class TestBench:
     """bench checks that bench files use manifest workloads and op roofline.
 
     Case table: direct (``load_workloads`` + ``op.eval_roofline()``) and
-    indirect (``benchmarks.base`` helpers) usage passes; missing
+    indirect (``benchmarks.benchmark_base`` helpers) usage passes; missing
     helpers, wrong op names, and syntax errors fail with the named
     diagnostics. Rows with ``None`` expect a clean pass.
     """
@@ -2054,7 +2054,7 @@ class TestBench:
                 op.eval_roofline()
             """, None),
             ("indirect base helpers pass", """\
-                from benchmarks.base import workloads_to_params, ManifestBenchmark
+                from benchmarks.benchmark_base import workloads_to_params, ManifestBenchmark
                 params = workloads_to_params('test_op')
                 ManifestBenchmark('test_op', op, params[0])
             """, None),
@@ -2072,7 +2072,7 @@ class TestBench:
                 op.eval_roofline()
             """, ["load_workloads"]),
             ("wrong op name fails (indirect path)", """\
-                from benchmarks.base import workloads_to_params, ManifestBenchmark
+                from benchmarks.benchmark_base import workloads_to_params, ManifestBenchmark
                 params = workloads_to_params('wrong_op')
                 ManifestBenchmark('wrong_op', op, params[0])
             """, ["load_workloads", "eval_roofline"]),

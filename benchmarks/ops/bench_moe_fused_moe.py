@@ -29,7 +29,7 @@ try:
 except ImportError:
     _VLLM_AVAILABLE = False
 
-from benchmarks.base import BenchmarkBase, BenchmarkReport
+from benchmarks.benchmark_base import BenchmarkBase, BenchmarkReport
 from tileops.manifest import load_workloads
 from tileops.ops.moe import FusedMoeFwdCbFwdOp, FusedMoeFwdOp, FusedTopKOp
 from workloads.moe import FusedMoeWorkload

@@ -15,7 +15,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from benchmarks.base import BenchmarkBase, BenchmarkReport
+from benchmarks.benchmark_base import BenchmarkBase, BenchmarkReport
 from tileops.ops.mamba2_fwd import Mamba2FwdOp
 from workloads.mamba2_e2e import Mamba2FwdFixture, Mamba2FwdWorkload
 

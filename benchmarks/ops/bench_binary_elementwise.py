@@ -11,7 +11,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from benchmarks.base import (
+from benchmarks.benchmark_base import (
     BenchmarkBase,
     BenchmarkReport,
     ManifestBenchmark,

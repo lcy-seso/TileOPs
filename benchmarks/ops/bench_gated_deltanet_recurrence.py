@@ -3,7 +3,7 @@ from typing import Optional
 import pytest
 import torch
 
-from benchmarks.base import BenchmarkBase, BenchmarkReport, ManifestBenchmark
+from benchmarks.benchmark_base import BenchmarkBase, BenchmarkReport, ManifestBenchmark
 from benchmarks.ops.attention.manifest_params import manifest_params
 from tileops.manifest import load_workloads
 from tileops.ops import GatedDeltaNetDecodeOp

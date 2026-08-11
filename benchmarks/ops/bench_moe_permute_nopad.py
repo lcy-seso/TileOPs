@@ -21,7 +21,7 @@ try:
 except ImportError:
     _VLLM_AVAILABLE = False
 
-from benchmarks.base import BenchmarkReport, ManifestBenchmark
+from benchmarks.benchmark_base import BenchmarkReport, ManifestBenchmark
 from tileops.manifest import load_workloads
 from tileops.ops.moe import MoePermuteNopadFwdOp
 from workloads.moe import MoePermuteWorkload

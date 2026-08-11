@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import pytest
 import torch
 
-from benchmarks.base import BenchmarkReport, bench_kernel
+from benchmarks.benchmark_base import BenchmarkReport, bench_kernel
 from tileops.manifest import load_workloads
 from tileops.ops import GroupedQueryAttentionPrefillFwdOp
 from workloads.gqa_fp8_utils import (

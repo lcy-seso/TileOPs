@@ -18,7 +18,7 @@ from typing import Optional
 import pytest
 import torch
 
-from benchmarks.base import BenchmarkBase, BenchmarkReport
+from benchmarks.benchmark_base import BenchmarkBase, BenchmarkReport
 from tileops.ops import DeltaNetBwdOp, DeltaNetFwdOp, DeltaNetOp
 from workloads.linear_attention import DeltaNetFwdWorkload
 from workloads.workload_base import FixtureBase

@@ -12,7 +12,7 @@ from typing import Optional
 import pytest
 import torch
 
-from benchmarks.base import (
+from benchmarks.benchmark_base import (
     BenchmarkBase,
     BenchmarkReport,
     ManifestBenchmark,

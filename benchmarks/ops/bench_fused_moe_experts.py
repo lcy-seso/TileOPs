@@ -53,7 +53,7 @@ except ImportError:
             stacklevel=2,
         )
 
-from benchmarks.base import BenchmarkReport, ManifestBenchmark
+from benchmarks.benchmark_base import BenchmarkReport, ManifestBenchmark
 from tileops.manifest import load_workloads
 from tileops.ops.moe import (
     FusedMoEExpertsNopadPersistent3WGFwdOp,

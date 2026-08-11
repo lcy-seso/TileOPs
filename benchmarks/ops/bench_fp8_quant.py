@@ -8,7 +8,7 @@ byte counts come from the op's ``eval_roofline()`` via
 import pytest
 import torch
 
-from benchmarks.base import (
+from benchmarks.benchmark_base import (
     BenchmarkReport,
     ManifestBenchmark,
     workload_field_params,
