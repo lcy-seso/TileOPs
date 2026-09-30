@@ -140,26 +140,6 @@ class _RowNormKernel(Kernel):
         return select_row_configs(self.D_padded, self.dtype, widths=self._row_widths)
 
 
-def _channel_of(row, col, num_groups: int, channels_per_group: int, spatial_size: int):
-    """Return the channel owning element $[row \\times col]$ of the (M, D) reshape.
-
-    Row ``m`` of the ``(N*G, (C/G)*spatial_size)`` view holds group
-    ``m % G``, and column ``d`` holds that group's local channel
-    ``d // spatial_size``.
-
-    Args:
-        row: Row index into the (M, D) view.
-        col: Column index into the (M, D) view.
-        num_groups: Number of groups G.
-        channels_per_group: C / G.
-        spatial_size: Number of spatial elements per channel.
-
-    Returns:
-        Index into the length-C weight / bias vectors.
-    """
-    return (row % num_groups) * channels_per_group + col // spatial_size
-
-
 @functools.lru_cache(maxsize=32)
 def _group_norm_kernel(M, D, eps, dtype, num_groups, channels_per_group, register_direct):
     """Build a row-wise normalization kernel with a per-channel affine.
@@ -179,6 +159,26 @@ def _group_norm_kernel(M, D, eps, dtype, num_groups, channels_per_group, registe
             ``(m % G) * channels_per_group`` onwards.
         register_direct: Whether a row is read from global memory into fragments.
     """
+
+    def _channel_of(row, col, num_groups: int, channels_per_group: int, spatial_size: int):
+        """Return the channel owning element $[row \\times col]$ of the (M, D) reshape.
+
+        Row ``m`` of the ``(N*G, (C/G)*spatial_size)`` view holds group
+        ``m % G``, and column ``d`` holds that group's local channel
+        ``d // spatial_size``.
+
+        Args:
+            row: Row index into the (M, D) view.
+            col: Column index into the (M, D) view.
+            num_groups: Number of groups G.
+            channels_per_group: C / G.
+            spatial_size: Number of spatial elements per channel.
+
+        Returns:
+            Index into the length-C weight / bias vectors.
+        """
+        return (row % num_groups) * channels_per_group + col // spatial_size
+
     D_padded = row_padding(D, 4 if dtype == "float32" else 2)
     spatial_size = D // channels_per_group
     C = num_groups * channels_per_group
