@@ -24,19 +24,6 @@ _BLOCK_N = 64
 _DQ_ROW = 128
 
 
-def _dq_slot(i, j):
-    """Where element ``(i, j)`` of a warpgroup's ``[_BLOCK_N, dim // 2]`` dQ half sits in
-    its f32 accumulator tile.
-
-    Each warp stores four consecutive f32 of the WGMMA accumulator per thread, 512
-    contiguous bytes per instruction, so the store to shared memory is free of bank
-    conflicts. Returns ``(row, col)`` of a ``[_BLOCK_N * dim // 2 // _DQ_ROW, _DQ_ROW]``
-    tile.
-    """
-    lane = (i % 8) * 4 + (j % 8) // 2
-    return (i // 16) * 8 + j // 8, lane * 4 + ((i % 16) // 8) * 2 + j % 2
-
-
 _SCHED_SRC = r"""
 // Lane 0 claims the next tile for its CTA; every lane of the warp gets it.
 __device__ __forceinline__ int claim_tile(int* sched) {
@@ -67,6 +54,18 @@ def _mha_bwd_ws_kernel(
     num_ctas: int,
     dtype: str,
 ) -> Callable:
+    def _dq_slot(i, j):
+        """Where element ``(i, j)`` of a warpgroup's ``[_BLOCK_N, dim // 2]`` dQ half sits in
+        its f32 accumulator tile.
+
+        Each warp stores four consecutive f32 of the WGMMA accumulator per thread, 512
+        contiguous bytes per instruction, so the store to shared memory is free of bank
+        conflicts. Returns ``(row, col)`` of a ``[_BLOCK_N * dim // 2 // _DQ_ROW, _DQ_ROW]``
+        tile.
+        """
+        lane = (i % 8) * 4 + (j % 8) // 2
+        return (i // 16) * 8 + j // 8, lane * 4 + ((i % 16) // 8) * 2 + j % 2
+
     sm_scale = dim**-0.5
     scale = sm_scale * LOG2E
     accum_dtype = "float"
