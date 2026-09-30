@@ -125,95 +125,49 @@ def _block_rows(rows: int, kernel_w: int, window_vectors: int, threads: int) -> 
     return count
 
 
-def _windowed_scan(
-    l_in: int,
-    kernel_w: int,
-    stride_w: int,
-    pad_w: int,
-    dilation_w: int,
-    dtype: str,
-    always_in_bounds: bool,
-):
-    """The windowed body's scan over one output, reading each tap where it lies.
-
-    ``T.max`` drops NaN, so PyTorch's propagation is spelled two ways: a flag where no
-    tap is bounds-tested, a select per tap where one is. Both are kept because which is
-    cheaper follows the bounds test.
-    """
-
-    @T.macro
-    def _store(x, out, row, ol, idx):
-        max_val = T.alloc_var(T.float32)
-        max_val = T.cast(_NEG_INF, _ACCUM_DTYPE)
-        if always_in_bounds:
-            has_nan = T.alloc_var(T.bool)
-            has_nan = False
-            for kw in T.serial(kernel_w):
-                val = T.cast(x[row, ol * stride_w - pad_w + kw * dilation_w], _ACCUM_DTYPE)
-                has_nan = has_nan | T.isnan(val)
-                max_val = T.max(max_val, val)
-            out[idx] = T.cast(T.if_then_else(has_nan, T.cast(_NAN, _ACCUM_DTYPE), max_val), dtype)
-        else:
-            for kw in T.serial(kernel_w):
-                iw = ol * stride_w - pad_w + kw * dilation_w
-                if (iw >= 0) and (iw < l_in):
-                    val = T.cast(x[row, iw], _ACCUM_DTYPE)
-                    max_val = T.if_then_else(T.isnan(val) or (val > max_val), val, max_val)
-            out[idx] = T.cast(max_val, dtype)
-
-    return _store
-
-
-def _windowed_indices_scan(
-    l_in: int,
-    kernel_w: int,
-    stride_w: int,
-    pad_w: int,
-    dilation_w: int,
-    dtype: str,
-    always_in_bounds: bool,
-):
-    """The windowed body's scan over one output, with the tap that won it."""
-
-    @T.macro
-    def _store(x, out, indices, row, ol, idx):
-        max_val = T.alloc_var(T.float32)
-        max_idx = T.alloc_var(T.int32)
-        # -1 until a NaN is seen, so it is also the flag saying one was.
-        nan_idx = T.alloc_var(T.int32)
-        max_val = T.cast(_NEG_INF, _ACCUM_DTYPE)
-        nan_idx = -1
-        if always_in_bounds:
-            # Why an expression and not a variable: a variable is opaque to the range
-            # analysis, and every tap would load under a bounds check it rules out.
-            iw0 = ol * stride_w - pad_w
-            max_idx = iw0
-        else:
-            iw0 = T.alloc_var(T.int32)
-            iw0 = ol * stride_w - pad_w
-            # The first tap the row holds, which is what PyTorch reports for a window
-            # whose every in-row tap is -inf.
-            max_idx = iw0 + dilation_w * T.ceildiv(T.max(-iw0, 0), dilation_w)
-        for kw in T.serial(kernel_w):
-            iw = iw0 + kw * dilation_w
-            if always_in_bounds or ((iw >= 0) and (iw < l_in)):
-                val = T.cast(x[row, iw], _ACCUM_DTYPE)
-                # Strict `>` reports the first of equal maxima, as PyTorch does, and
-                # rejects NaN without a separate test.
-                take = val > max_val
-                max_val = T.if_then_else(take, val, max_val)
-                max_idx = T.if_then_else(take, iw, max_idx)
-                nan_idx = T.if_then_else(T.isnan(val), iw, nan_idx)
-
-        # PyTorch reports the last NaN a window visited.
-        out[idx] = T.cast(T.if_then_else(nan_idx >= 0, T.cast(_NAN, _ACCUM_DTYPE), max_val), dtype)
-        indices[idx] = T.cast(T.if_then_else(nan_idx >= 0, nan_idx, max_idx), "int64")
-
-    return _store
-
-
 def _windowed_builder(shape: _Shape, plan: _Plan):
     """One output per lane, each tap read where it lies."""
+
+    def _windowed_scan(
+        l_in: int,
+        kernel_w: int,
+        stride_w: int,
+        pad_w: int,
+        dilation_w: int,
+        dtype: str,
+        always_in_bounds: bool,
+    ):
+        """The windowed body's scan over one output, reading each tap where it lies.
+
+        ``T.max`` drops NaN, so PyTorch's propagation is spelled two ways: a flag where no
+        tap is bounds-tested, a select per tap where one is. Both are kept because which is
+        cheaper follows the bounds test.
+        """
+
+        @T.macro
+        def _store(x, out, row, ol, idx):
+            max_val = T.alloc_var(T.float32)
+            max_val = T.cast(_NEG_INF, _ACCUM_DTYPE)
+            if always_in_bounds:
+                has_nan = T.alloc_var(T.bool)
+                has_nan = False
+                for kw in T.serial(kernel_w):
+                    val = T.cast(x[row, ol * stride_w - pad_w + kw * dilation_w], _ACCUM_DTYPE)
+                    has_nan = has_nan | T.isnan(val)
+                    max_val = T.max(max_val, val)
+                out[idx] = T.cast(
+                    T.if_then_else(has_nan, T.cast(_NAN, _ACCUM_DTYPE), max_val), dtype
+                )
+            else:
+                for kw in T.serial(kernel_w):
+                    iw = ol * stride_w - pad_w + kw * dilation_w
+                    if (iw >= 0) and (iw < l_in):
+                        val = T.cast(x[row, iw], _ACCUM_DTYPE)
+                        max_val = T.if_then_else(T.isnan(val) or (val > max_val), val, max_val)
+                out[idx] = T.cast(max_val, dtype)
+
+        return _store
+
     rows, l_in, kernel_w, stride_w, pad_w, dilation_w, dtype = shape
     out_l, in_bounds = plan.out_l, plan.always_in_bounds
     total_output = rows * out_l
@@ -244,6 +198,56 @@ def _windowed_builder(shape: _Shape, plan: _Plan):
 
 def _windowed_indices_builder(shape: _Shape, plan: _Plan):
     """The windowed body, also emitting each maximum's position."""
+
+    def _windowed_indices_scan(
+        l_in: int,
+        kernel_w: int,
+        stride_w: int,
+        pad_w: int,
+        dilation_w: int,
+        dtype: str,
+        always_in_bounds: bool,
+    ):
+        """The windowed body's scan over one output, with the tap that won it."""
+
+        @T.macro
+        def _store(x, out, indices, row, ol, idx):
+            max_val = T.alloc_var(T.float32)
+            max_idx = T.alloc_var(T.int32)
+            # -1 until a NaN is seen, so it is also the flag saying one was.
+            nan_idx = T.alloc_var(T.int32)
+            max_val = T.cast(_NEG_INF, _ACCUM_DTYPE)
+            nan_idx = -1
+            if always_in_bounds:
+                # Why an expression and not a variable: a variable is opaque to the range
+                # analysis, and every tap would load under a bounds check it rules out.
+                iw0 = ol * stride_w - pad_w
+                max_idx = iw0
+            else:
+                iw0 = T.alloc_var(T.int32)
+                iw0 = ol * stride_w - pad_w
+                # The first tap the row holds, which is what PyTorch reports for a window
+                # whose every in-row tap is -inf.
+                max_idx = iw0 + dilation_w * T.ceildiv(T.max(-iw0, 0), dilation_w)
+            for kw in T.serial(kernel_w):
+                iw = iw0 + kw * dilation_w
+                if always_in_bounds or ((iw >= 0) and (iw < l_in)):
+                    val = T.cast(x[row, iw], _ACCUM_DTYPE)
+                    # Strict `>` reports the first of equal maxima, as PyTorch does, and
+                    # rejects NaN without a separate test.
+                    take = val > max_val
+                    max_val = T.if_then_else(take, val, max_val)
+                    max_idx = T.if_then_else(take, iw, max_idx)
+                    nan_idx = T.if_then_else(T.isnan(val), iw, nan_idx)
+
+            # PyTorch reports the last NaN a window visited.
+            out[idx] = T.cast(
+                T.if_then_else(nan_idx >= 0, T.cast(_NAN, _ACCUM_DTYPE), max_val), dtype
+            )
+            indices[idx] = T.cast(T.if_then_else(nan_idx >= 0, nan_idx, max_idx), "int64")
+
+        return _store
+
     rows, l_in, kernel_w, stride_w, pad_w, dilation_w, dtype = shape
     out_l, in_bounds = plan.out_l, plan.always_in_bounds
     total_output = rows * out_l
@@ -303,58 +307,29 @@ def _stage_macro(head: int, staged: int, tail: int, stage_rows: int, dtype: str)
     return _stage
 
 
-def _staged_scan(kernel_w: int, stride_w: int, dilation_w: int, base: int, dtype: str):
-    """The staged body's scan over one output, every tap read off the tile."""
-
-    @T.macro
-    def _store(tile, out, r, row, ol):
-        max_val = T.alloc_var(T.float32)
-        has_nan = T.alloc_var(T.bool)
-        max_val = T.cast(_NEG_INF, _ACCUM_DTYPE)
-        has_nan = False
-        for kw in T.serial(kernel_w):
-            val = T.cast(tile[r, base + ol * stride_w + kw * dilation_w], _ACCUM_DTYPE)
-            has_nan = has_nan | T.isnan(val)
-            max_val = T.max(max_val, val)
-
-        out[row, ol] = T.cast(T.if_then_else(has_nan, T.cast(_NAN, _ACCUM_DTYPE), max_val), dtype)
-
-    return _store
-
-
-def _staged_indices_scan(
-    kernel_w: int, stride_w: int, pad_w: int, dilation_w: int, base: int, dtype: str
-):
-    """The staged body's scan over one output, with the tap that won it."""
-
-    @T.macro
-    def _store(tile, out, indices, r, row, ol):
-        max_val = T.alloc_var(T.float32)
-        max_idx = T.alloc_var(T.int32)
-        nan_idx = T.alloc_var(T.int32)
-        max_val = T.cast(_NEG_INF, _ACCUM_DTYPE)
-        nan_idx = -1
-        iw0 = ol * stride_w - pad_w
-        # The first tap the row holds, which is what PyTorch reports for a window whose
-        # every in-row tap is -inf.
-        max_idx = iw0 + dilation_w * T.ceildiv(T.max(-iw0, 0), dilation_w)
-        for kw in T.serial(kernel_w):
-            val = T.cast(tile[r, base + ol * stride_w + kw * dilation_w], _ACCUM_DTYPE)
-            take = val > max_val
-            max_val = T.if_then_else(take, val, max_val)
-            max_idx = T.if_then_else(take, iw0 + kw * dilation_w, max_idx)
-            nan_idx = T.if_then_else(T.isnan(val), iw0 + kw * dilation_w, nan_idx)
-
-        out[row, ol] = T.cast(
-            T.if_then_else(nan_idx >= 0, T.cast(_NAN, _ACCUM_DTYPE), max_val), dtype
-        )
-        indices[row, ol] = T.cast(T.if_then_else(nan_idx >= 0, nan_idx, max_idx), "int64")
-
-    return _store
-
-
 def _staged_builder(shape: _Shape, plan: _Plan):
     """A block's rows staged in shared memory once, every tap read off them."""
+
+    def _staged_scan(kernel_w: int, stride_w: int, dilation_w: int, base: int, dtype: str):
+        """The staged body's scan over one output, every tap read off the tile."""
+
+        @T.macro
+        def _store(tile, out, r, row, ol):
+            max_val = T.alloc_var(T.float32)
+            has_nan = T.alloc_var(T.bool)
+            max_val = T.cast(_NEG_INF, _ACCUM_DTYPE)
+            has_nan = False
+            for kw in T.serial(kernel_w):
+                val = T.cast(tile[r, base + ol * stride_w + kw * dilation_w], _ACCUM_DTYPE)
+                has_nan = has_nan | T.isnan(val)
+                max_val = T.max(max_val, val)
+
+            out[row, ol] = T.cast(
+                T.if_then_else(has_nan, T.cast(_NAN, _ACCUM_DTYPE), max_val), dtype
+            )
+
+        return _store
+
     rows, l_in, kernel_w, stride_w, pad_w, dilation_w, dtype = shape
     itemsize = shape.itemsize
     out_l, head, span = plan.out_l, plan.head, plan.span
@@ -387,6 +362,37 @@ def _staged_builder(shape: _Shape, plan: _Plan):
 
 def _staged_indices_builder(shape: _Shape, plan: _Plan):
     """The staged body, also emitting each maximum's position."""
+
+    def _staged_indices_scan(
+        kernel_w: int, stride_w: int, pad_w: int, dilation_w: int, base: int, dtype: str
+    ):
+        """The staged body's scan over one output, with the tap that won it."""
+
+        @T.macro
+        def _store(tile, out, indices, r, row, ol):
+            max_val = T.alloc_var(T.float32)
+            max_idx = T.alloc_var(T.int32)
+            nan_idx = T.alloc_var(T.int32)
+            max_val = T.cast(_NEG_INF, _ACCUM_DTYPE)
+            nan_idx = -1
+            iw0 = ol * stride_w - pad_w
+            # The first tap the row holds, which is what PyTorch reports for a window whose
+            # every in-row tap is -inf.
+            max_idx = iw0 + dilation_w * T.ceildiv(T.max(-iw0, 0), dilation_w)
+            for kw in T.serial(kernel_w):
+                val = T.cast(tile[r, base + ol * stride_w + kw * dilation_w], _ACCUM_DTYPE)
+                take = val > max_val
+                max_val = T.if_then_else(take, val, max_val)
+                max_idx = T.if_then_else(take, iw0 + kw * dilation_w, max_idx)
+                nan_idx = T.if_then_else(T.isnan(val), iw0 + kw * dilation_w, nan_idx)
+
+            out[row, ol] = T.cast(
+                T.if_then_else(nan_idx >= 0, T.cast(_NAN, _ACCUM_DTYPE), max_val), dtype
+            )
+            indices[row, ol] = T.cast(T.if_then_else(nan_idx >= 0, nan_idx, max_idx), "int64")
+
+        return _store
+
     rows, l_in, kernel_w, stride_w, pad_w, dilation_w, dtype = shape
     itemsize = shape.itemsize
     out_l, head, span = plan.out_l, plan.head, plan.span
