@@ -37,11 +37,6 @@ def _any_fails(held, count):
     return T.Not(functools.reduce(T.And, [held[j] for j in range(count)]))
 
 
-def _vector_lanes(dtype, count):
-    """Elements of *dtype* in one 16-byte vector, at most *count*."""
-    return min(count, 128 // DataType(dtype).bits)
-
-
 def _narrows(dtype, out_dtype):
     """Whether a result is stored narrower than its operand."""
     return DataType(out_dtype).bits < DataType(dtype).bits
@@ -472,6 +467,11 @@ def _make_binary_register_copy(
     num_per_thread=8,
 ):
     """Binary register_copy: fragment load -> compute -> fragment store."""
+
+    def _vector_lanes(dtype, count):
+        """Elements of *dtype* in one 16-byte vector, at most *count*."""
+        return min(count, 128 // DataType(dtype).bits)
+
     out_dtype = output_dtype or dtype
 
     @tilelang.jit(out_idx=[2])
