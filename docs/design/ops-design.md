@@ -1,15 +1,70 @@
 # Op Interface Design
 
-What an Op's interface rests on, then the step-by-step playbook for scaffolding one from a manifest entry, then the contract an op takes on when it declares itself compilable. Per-slot rules are authoritative in [`ops-design-reference.md`](ops-design-reference.md); this file states the decisions those rules follow from.
+Op responsibilities, implemented class structure, execution behavior and scaffolding guide. Interface details: [reference](ops-design-reference.md). Per-slot rules: [op-slot-rules.md](op-slot-rules.md).
 
 ## Concepts
 
 Every operator is split into two classes — **Op** (host-side: validates inputs, dispatches to Kernel, assembles output) and **Kernel** (device-side: owns the TileLang program, tile configuration, JIT compilation). The two layers are independently modifiable — changing a Kernel's tile strategy does not require changing the Op.
 
+### Op base responsibilities
+
+The implementation groups three responsibilities in `Op` and its generated helpers:
+
+| Responsibility        | Implementation                                                                                           |
+| --------------------- | -------------------------------------------------------------------------------------------------------- |
+| Contract              | `_Plan` generates construction, input, shape, effect and roofline functions from the manifest.           |
+| Execution runtime     | `Op` binds targets, selects and caches entries, holds delegates, tunes kernels and manages active calls. |
+| Execution observation | `Op.last_call`, resource queries and roofline methods expose completed calls and held resources.         |
+
+`Op` and codegen jointly implement these three responsibilities.
+
+### Class structure
+
+![Op class diagram](diagrams/op-base.svg)
+
+[PlantUML source](diagrams/op-base.puml). The diagram shows selected members of the implemented classes. Solid arrows are references, dashed arrows dependencies, and the hollow triangle inheritance. Terracotta italics mark abstract declarations; class names are bold. `_name` is an internal Python name and `[property]` a property, without enforced access restrictions.
+
+- `Op` is abstract. Concrete classes implement `forward()`; manifest codegen supplies `_infer_output_shapes()`, `_validate_dtypes()` and `eval_roofline()`.
+- Each manifest-backed class holds `_signature`, a shared `_Plan`. Parameters, `_construction_ix`, effect-branch caches, target binding and execution resources live on instances.
+- `_Boundary` registers custom operators and generates `_call_boundary()`. The generated function retains the boundary object; operator bodies resolve an instance handle and invoke `Op._serve()`.
+- `SignatureCall` holds checked indices, tensor shapes and dtypes, effects, metadata references and completed stage calls. `Op._signature_call` retains the last completed record.
+
+`op_base.py` owns execution and observation. `_signature_codegen.py` defines `_Plan`, `_Boundary`, `SignatureCall` and generated methods. `_params_codegen.py` supplies parameter names through `PARAM_NAMES_ATTRIBUTE`. `compile_boundary.py` holds weak instance references for custom operators.
+
+The manifest owns output order, shape, dtype and effects. Packed representations also follow the operator's declared semantics: `INT4QuantPerGroupFwdOp` returns signed `int8` packed weights and `float32` group parameters. `GemmW4A16FwdOp` consumes its own `uint8` weight layout with separate scales and zero points. A composition checks representation compatibility and supplies an explicit conversion where needed.
+
+### Construction and execution
+
+`Op` has no base constructor. A concrete constructor assigns its parameters, target and tuning policy, then calls `dispatch_kernel(kernel_map)`. That method loads registrations, checks construction, installs the kernel map and registers the instance. `_Plan.construct()` stores derived facts in `_construction_ix`; parameter attributes remain ordinary Python attributes. `target` is constructor-only by convention.
+
+| Entry                         | Execution and recording                                                                                                                                                                                                                                           |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Eager call without a boundary | `__call__()` checks the signature, resolves the target, executes `forward()` or the target, validates results and retains the call.                                                                                                                               |
+| Compile boundary              | Concrete `forward()` calls `_call_boundary()`; the real custom operator enters `_serve()`, which executes `_eager_forward()` or the target with checks and recording. `_eager_forward()` is a concrete implementation convention, not an abstract method on `Op`. |
+| Traced composition            | `__call__()` skips its eager signature and recording path. The graph traces `forward()` and child boundaries; no parent record is produced by tracing.                                                                                                            |
+| Empty writes                  | A call with at least one declared write and no elements in any write constructs the signature-defined result without binding or launching an implementation. It retains a `SignatureCall`.                                                                        |
+| Meta/fake                     | The registered fake checks inputs and infers outputs. A direct eager meta call retains a record with empty stage lists; fake tracing does not replace `last_call`.                                                                                                |
+
+Active calls use a thread-local stack. Success validates outputs before `_keep_call()`; `except Exception` drops the active call. A failure handled while initially unresolved invokes `_unsettle()`, which clears execution caches and recursively resets held delegates, including injected ones. A failure on an already settled instance does not invoke that reset. The previous record is retained. These handlers do not catch `BaseException` interruptions, and do not undo tensor writes.
+
+### Execution observation
+
+Resource queries describe currently held entries; `last_call` describes the most recently completed checked call. A cached specialization need not have run in that call. `run_config()` reports the instance config or first configured kernel, not necessarily the latest call's configuration.
+
+`SignatureCall` is a frozen dataclass containing mutable mappings and references to metadata tensors. `values()` reads those tensors when analysis runs; later caller mutation can change the values an earlier record exposes. Meta records carry no metadata values. Stage collection maps child object identity to one stage and appends completed calls in order; holding the same child under multiple stages does not preserve distinct invocation labels.
+
+Generated `eval_roofline()` evaluates the shared plan over `last_call`; `compute_roof()` and `roofline_inputs()` remain Op hooks. Formulas describe work and theoretical traffic, not timing or numerical correctness. Partial KV-cache writes may make the read/write split unavailable even when total bytes are known.
+
+### Input validation and numerical verification
+
+Generated checks enforce declared shapes, dtypes, placement and output effects. Metadata-value predicates designated as caller obligations remain the caller's responsibility. Ops exposing `validate_inputs=False`, including MeanPooling and GQA variants, can opt into synchronous content checks in their built-in bodies. Those checks run on each enabled call and cannot run during CUDA Graph capture; a whole-op target bypasses the built-in body. MeanPooling does not cache prior metadata validation.
+
+Numerical verification belongs to workloads: `ref_program` consumes the live inputs and `verification()` supplies the shared comparison contract. Numerical tests execute through Op dispatch; an implementation or configuration is pinned with `kernel_map`. The Op's structural result checks do not run a reference computation. See [testing.md](testing.md#tests).
+
 ### Class hierarchy
 
 ```
-Op                          ← L1: thin base, shared by all ops
+Op                          ← L1: shared host-side infrastructure
   └── FamilyBase            ← L2: family-specific forward() flow (optional)
         └── ConcreteOp      ← L3: leaf class emitted by the scaffold
 ```
@@ -30,7 +85,7 @@ Op                          ← L1: thin base, shared by all ops
 
 The kernel is dtype-specialized, so this makes kernel construction uniformly deferred to the first `forward()` — for fixed-rank and arbitrary-rank ops alike — keyed by every input that selects a specialization, dtype among them. `dispatch_kernel()` stays in `__init__`: resolving the kernel *class* needs no tensor. It also needs no device, and must not ask for one — see [Kernel selection](#kernel-selection).
 
-The generated `_validate_dtypes` is the only dtype gate, and it runs on every `forward()` call: validity depends on the tensors passed, and an op has no constructed dtype to compare them against. Roofline timing and formula semantics are in [roofline.md](roofline.md); see [Parameter Design](ops-design-reference.md#parameter-design) for fixed-rank vs arbitrary-rank details and [Codegen Details](ops-design-reference.md#codegen) for calling conventions.
+Generated signature checks enforce dtypes at eager and custom-op boundaries. `_validate_dtypes()` exposes the same checks; execution bodies repeat none. Traced compositions skip the parent check and retain their child boundaries. Roofline timing and formula semantics are in [roofline.md](roofline.md); see [Parameter Design](ops-design-reference.md#parameter-design) for fixed-rank vs arbitrary-rank details and [Codegen Details](ops-design-reference.md#codegen) for calling conventions.
 
 ### Kernel selection
 
@@ -46,9 +101,13 @@ The generated `_validate_dtypes` is the only dtype gate, and it runs on every `f
 
 **Applicability states the calls an implementation serves, positively.** An op checks no implementation's limits, and the signature holds only what the algorithm requires ([manifest.md § Refinements](manifest.md#refinements)). Why: each implementation answers for itself.
 
+Hardware resource limits also belong to implementation selection. `RMSNormFwdOp` exposes one `rms_norm` interface; its regular and streaming kernels declare their applicability and precedence. Shared-memory limits do not narrow the Op contract.
+
 **Precedence picks among the available implementations that apply.** `general` is below every other, and `preferred_over` names the implementations one wins over, transitively and acyclically; no winner is an error, several an ambiguity. Why: a declared relation composes implementations unaware of each other, where order or numeric priority cannot.
 
 **An entry is what `entry_for` builds, shared by build identity.** A hit is one lookup by interface and call spec; a miss selects, then builds or reuses. Tuning acts on the entry. Why: a hit costs one lookup.
+
+**Reject before dependent work.** When the required call facts are already known, a multi-stage body resolves support for later stages before launching their preprocessing. `GQABwdOp` acquires its backward entry before running preprocess. `select_implementation(interface, call)` can check support without building an entry; it belongs to `Op` and uses the same selection rules as `kernel_for`.
 
 **Adding a kernel takes two hooks.** Register the implementation, then state `applies`, adding `preferred_over` only where it overlaps another non-general implementation. Undeclared, an implementation is available on the CUDA devices of every architecture, applies to every call and has no precedence. Why: a single-implementation op only inherits its interface.
 
@@ -74,19 +133,25 @@ L1 owns get-or-build. An op names the **kernel interface** a kernel serves, and 
 
 The identity is opaque to L1 and must carry every input that can change what gets built. The selected implementation names those axes in its own `entry_for`, because only it knows what its constructor reads.
 
+Call-spec identity and entry identity have different scopes. RMSNorm calls with different row counts can share an entry specialized by normalized width, epsilon and dtype. Further JIT specializations inside that entry remain kernel-owned and execute outside tracing. `Op` enumerates entries, not every compiled function hidden inside them.
+
 The entry, not the kernel, is the unit built once. A specialization that must build several kernels together returns them as one immutable entry from one factory; kernels keyed independently of each other are separate interfaces.
+
+Auxiliary tensors remain implementation-owned: RoPE and GQA cache frequency tables, and MeanPooling caches placeholder tensors. These caches are separate from the base kernel-entry caches and are not cleared by `_unsettle()`.
 
 `iter_kernels()` enumerates entries and delegates explicitly, never by reflecting over attributes. Reflection could only guess: a kernel nested deeper than the traversal went, or held in an attribute of an unrecognised type, was silently invisible. Declaring turns that silent omission into a missing declaration.
 
 **Sub-ops follow the rule for kernels.** A sub-op's constructor arguments may come from the call, so an instance built at construction cannot show what a composite holds.
 
 - A composite declares the sub-op classes it may hold in `delegate_types`: its composition is a fact of the class, checkable before any call.
-- It holds every sub-op through `delegate_for`, once per identity, whether the sub-op is built at construction, built per call or injected. The sub-op inherits the composite's execution policy.
-- `kernel_delegates()` is derived from what `delegate_for` holds, so enumeration is complete by construction and a composite never overrides `autotune()`.
+- It holds every sub-op through `delegate_for`, once per identity, whether built at construction, built per call or injected. Created children inherit the composite's execution policy; injected instances are held as supplied. Stage names match manifest composition.
+- `kernel_delegates()` is derived from what `delegate_for` holds, so enumeration is complete by construction. The base tuning walk includes injected children; it makes no owned/borrowed distinction.
 
 `delegate_for` is eager, like `kernel_for`: a sub-op that depends on the call is built in `_eager_forward`, never on a traced path.
 
 `built_kernels(interface)` is the backend-neutral view: one entry per identity, whoever built it. `iter_kernels()`, and through it `autotune()` and `run_config()`, act on the TileOPs `Kernel` instances the entries hold. A target's builder is not passed `tune`, so a tuning request that cannot reach it warns instead of being dropped.
+
+`GemmW4A16FwdOp` overrides `autotune()` to warn and refuse generic tuning. Its `repack()` helper validates packed weights and calls the built-in `w4a16_repack` interface directly; it does not enter whole-op target dispatch or produce a completed-call record.
 
 ## Scaffolding an Op from a Manifest Entry
 
@@ -187,7 +252,10 @@ def __init__(
 **Output.**
 
 ```python
-    kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {"example_cumsum_fwd": ExampleCumsumKernel}
+class ExampleCumsumFwdOp(Op):
+    kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
+        "example_cumsum_fwd": ExampleCumsumKernel
+    }
     interfaces: ClassVar[Mapping[str, type[KernelInterface]]] = {
         "example_cumsum_fwd": ExampleCumsumFwdInterface
     }
@@ -195,8 +263,10 @@ def __init__(
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # The generated signature checks have run: dtype, shape, dim range.
         dim = normalize_axis(self.dim, x.ndim)
-        x = x.contiguous()          # handed over as the manifest declares it
-        call = ExampleCumsumCall(device=x.device, shape=tuple(x.shape), dim=dim, dtype=x.dtype)
+        x = x.contiguous()  # handed over as the manifest declares it
+        call = ExampleCumsumCall(
+            device=x.device, shape=tuple(x.shape), dim=dim, dtype=x.dtype
+        )
         return self.kernel_for("example_cumsum_fwd", call)(x)
 ```
 

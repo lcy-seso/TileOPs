@@ -20,11 +20,11 @@ Per-family protocol variables, declared by L2 bases and overridden by L3 ops.
 
 ### `Op` base class interface ([`src/tileops/ops/op_base.py`](../../src/tileops/ops/op_base.py))
 
-Abstract interface: `forward()`. Methods generated from the manifest entry: the construction and call checks, `_infer_output_shapes`, `_validate_dtypes`, `eval_roofline`.
+Abstract computation method: `forward()`. `_infer_output_shapes`, `_validate_dtypes` and `eval_roofline` are also abstract on `Op` and supplied by codegen. Methods generated from the manifest entry: the construction and call checks, `_infer_output_shapes`, `_validate_dtypes`, `eval_roofline`.
 
 - `kernel_types` (class attribute) is the one declaration of an op's dispatch keys; `default_kernel_map` (property) is derived from it. `interfaces` (class attribute) maps each place the op calls a kernel to its kernel interface. Each op class created adds its keys to a set `op_base` holds, and a `kernel_map` override naming a key outside that set is refused.
 - `delegate_types` (class attribute) is the one declaration of the sub-ops an op may hold: stage name to op class, in stage order. Default empty.
-- `last_call` (property) is the `SignatureCall` of the op's last successfully completed call: its `ix`, tensors, effects, metadata tensors, and the checked calls its sub-ops completed during it, by stage. It raises `RuntimeError` before one completes. `eval_roofline` prices it.
+- `last_call` (property) is the `SignatureCall` of the op's last successfully completed call: its `ix`, tensor shapes and dtypes, effects, live metadata references, and completed child calls by stage. A direct eager meta call also replaces this record; fake tracing does not. It raises `RuntimeError` before one completes. `eval_roofline` prices it.
 
 #### Kernel caching and enumeration methods
 
@@ -76,10 +76,10 @@ A restriction on the accepted domain is a refinement of the signature, never a h
 
 ## Naming Conventions (Appendix) <a id="naming-conventions"></a>
 
-- **Op class:** `{PascalCaseName}{Direction}Op`. `Direction` ∈ {`Fwd`, `Bwd`}, mandatory. Manifest key must equal `cls.__name__`. Abbreviation casing: `RMSNormFwdOp`, `SSDRecurrentFwdOp` — fully uppercase per `.claude/rules/code-style.md`. Slot [S6](op-slot-rules.md#slot-s6).
+- **Op class:** `{PascalCaseName}{Direction}Op`. `Direction` ∈ {`Fwd`, `Bwd`}, mandatory. Manifest key must equal `cls.__name__`. Canonical spellings follow `scripts/lint/op_naming_lint.py`, including `GQA`, `MLA`, `DSA`, `FP8`, `MoE`, `RoPE` and `YaRN`. Slot [S6](op-slot-rules.md#slot-s6).
 - **Kernel class:** `{PascalCaseName}Kernel`, naming the algorithm and its variant, e.g. `BatchNormBwdSplitKernel`. No direction suffix is required: the interface it inherits carries the direction.
 - **Kernel interface:** `{PascalCaseName}{Direction}Interface`, beside the call spec it names: in the family's `call_spec.py`, or in the kernel module of a family with one kernel file. Same direction-suffix rule as the op class: variant words precede the direction, e.g. `BatchNormTrainFwdInterface`.
-- **`kernel_map` keys:** `snake_case`, decoupled from Kernel class names. Values must match the Kernel `cls.__name__`. The table does not describe dispatch strategy. Slot [S14](op-slot-rules.md#slot-s14).
+- **`kernel_map` keys:** `snake_case`, decoupled from Kernel class names. Values are kernel classes implementing the registered key's interface; the key retains its registered applicability and precedence. Slot [S14](op-slot-rules.md#slot-s14).
 - **Builder functions:** `snake_case`, e.g. `def rms_norm_fwd(M, N, dtype, ...): ...`.
 - **Filenames:** all-lowercase with underscores. Multi-word abbreviations stay fully lowercase (`rms_norm.py`, `ssd_decode.py`; never `RMSNorm.py` or `Ssd_decode.py`). Norm-related names never contract (`rms_norm`, not `rmsnorm`).
 
@@ -94,7 +94,7 @@ Two time points: `__init__` takes `signature.params`, construction-time tensors 
 ### Calling conventions
 
 - **Kernel construction:** in `_eager_forward`, through `kernel_for` — never in the traced `forward`, which is one call to the op's operator ([Compile Dispatch Boundary](ops-design.md#compile-dispatch-boundary)). See [Slot S16](op-slot-rules.md#slot-s16).
-- **`_validate_dtypes`:** runs on every call, and is the only place an op rejects a dtype.
+- **`_validate_dtypes`:** exposes the generated signature check, also used by eager and custom-op call boundaries. Traced compositions skip the parent check; child boundaries still validate their inputs.
 - **Non-runtime consumers** (validator, graph compiler): call `_infer_output_shapes` with concrete shape tuples, and the input dtypes (keyword `dtypes`) where an output shape reads a dtype index, without constructing tensors. Roofline consumers use interfaces in [`roofline.md`](roofline.md).
 
 ## Development Path (Appendix) <a id="development-path"></a>

@@ -196,7 +196,7 @@ A consumer that is not the op itself instantiates the Op or reads pre-computed `
 
 #### 4.4.5 Evaluator Surface Boundary
 
-Roofline expressions live in exactly one place at runtime: the plain Python body of each op's `eval_roofline()`. Two surfaces are rejected and must not be built — an op-local AST evaluator, and a manifest-level roofline evaluator that any consumer could call for `(flops, bytes)`.
+Inline roofline expressions are emitted as Python functions held by the class's `_Plan`; function-mode entries call their declared formula function. Generated `Op.eval_roofline()` delegates to `_Plan.roofline(last_call)`. Consumers use the Op interface; there is no op-local AST evaluator or separate public manifest evaluator.
 
 Neither the generated body nor anything else parses, AST-analyzes or evaluates a formula string at run time. The name and form check happens once, before emission, which copies the checked expressions into plain Python.
 
