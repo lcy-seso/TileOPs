@@ -96,8 +96,9 @@ design, calling conventions — live in
 
 ### Slot S13: <a id="slot-s13"></a> `__init__` body
 
-- **Rule.** Sequence: (a) `self.<name> = <name>` per parameter, `target` among them; (b)
-  `self.dispatch_kernel(kernel_map)`, which resolves the kernel *class* and needs no tensor.
+- **Rule.** Normalize semantic parameters, then pass them to `Op.__init__` with execution policy
+  supplied separately. The base validates and fixes parameters before initializing the runtime.
+  Wire delegates afterward; injected collaborators cannot rewrite validated parameters.
   **Construct no kernel and declare no cache here**: the kernel is specialized by what the call
   carries, and L1 owns get-or-build
   ([Kernel caching](./ops-design.md#kernel-caching-and-enumeration)).
@@ -105,10 +106,7 @@ design, calling conventions — live in
 - **Example (arbitrary-rank).**
 
   ```python
-  self.dim = dim
-  self.target = target
-  self.tune = tune
-  self.dispatch_kernel(kernel_map)
+  super().__init__(params={"dim": dim}, target=target, kernel_map=kernel_map, tune=tune)
   ```
 
 - **Common mistakes.** Hard-coding the kernel class
@@ -135,17 +133,18 @@ design, calling conventions — live in
   `default_kernel_map` naming a key `kernel_types` does not declare; an interface per shape
   regime instead of one interface whose implementations split the regimes.
 
-### Slot S15: <a id="slot-s15"></a> `forward` signature
+### Slot S15: <a id="slot-s15"></a> `_eager_forward` signature
 
 - **Rule.** The parameter list starts with the signature's call-time inputs in `signature.inputs`
   order, optional inputs defaulting to `None`, followed by `out` when an output declares
   `buffer: out` ([manifest.md § Effects](./manifest.md#effects)). Code-defined execution parameters
   may follow. The return matches `signature.outputs`: one tensor, a tuple in declared order, `None`
   in a nullable position whose expression is false, and `None` when `outputs` is empty.
+  The generated public `forward` adapter preserves this signature.
 - **Common mistakes.** Keyword-only tensor parameters; non-tensor contract parameters, which belong
   to `__init__`.
 
-### Slot S16: <a id="slot-s16"></a> `forward` body
+### Slot S16: <a id="slot-s16"></a> `_eager_forward` body
 
 - **Rule.** The checks generated from the signature have run before the body. Sequence: (a)
   normalize parameter-dependent axes with the manifest's axis rule
@@ -154,9 +153,8 @@ design, calling conventions — live in
   `self.kernel_for(<interface>, <call>)`; (d) call what it returned with the parameters the
   interface's abstract `forward` declares, in that order — output buffers included, `None` for an
   absent optional one.
-  An op registered for `fullgraph=True` compilation keeps this body under the name `_eager_forward`,
-  and its `forward` becomes one call to the operator it registers — that operator is outside the
-  scaffold's scope, see
+  The scaffold emits `_eager_forward`; L1 supplies the public adapter. A compile-boundary adapter
+  calls a generated custom operator whose real body enters the runtime. See
   [Compile Dispatch Boundary](./ops-design.md#compile-dispatch-boundary).
 - **Derivation.** The first argument is a key of `interfaces`; the call is that interface's
   call spec. The interface's abstract `forward` states what the kernel is handed, so the op passes
@@ -169,7 +167,7 @@ design, calling conventions — live in
   kernel's own call wrapper, so a backend is handed the shapes the manifest declares.
 - **Example (arbitrary-rank).**
   ```python
-  def forward(self, x: torch.Tensor) -> torch.Tensor:
+  def _eager_forward(self, x: torch.Tensor) -> torch.Tensor:
       dim = normalize_axis(self.dim, x.ndim)
       x = x.contiguous()
       call = ExampleCumsumCall(

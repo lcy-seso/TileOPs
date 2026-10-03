@@ -1,21 +1,111 @@
 # Op Interface Design
 
-What an Op's interface rests on, then the step-by-step playbook for scaffolding one from a manifest entry, then the contract an op takes on when it declares itself compilable. Per-slot rules are authoritative in [`ops-design-reference.md`](ops-design-reference.md); this file states the decisions those rules follow from.
+Op responsibilities, lifecycle rules and implementation guide. Interface details: [reference](ops-design-reference.md). Per-slot rules: [op-slot-rules.md](op-slot-rules.md).
 
 ## Concepts
 
 Every operator is split into two classes — **Op** (host-side: validates inputs, dispatches to Kernel, assembles output) and **Kernel** (device-side: owns the TileLang program, tile configuration, JIT compilation). The two layers are independently modifiable — changing a Kernel's tile strategy does not require changing the Op.
 
+### Op base responsibilities
+
+The Op layer separates contract, execution runtime and execution observation.
+
+| Responsibility        | Owns                                                                                                | Boundary                                                                        |
+| --------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Op contract           | Parameter rules, input/output rules, effects, shape/dtype inference, interfaces and compile schema. | Defines and checks validity; does not change execution resources.               |
+| Execution runtime     | Target binding, kernels, reusable resources, sub-ops, tuning and call lifecycle.                    | Manages execution state and failure recovery; produces successful-call records. |
+| Execution observation | Completed-call records, resource queries and roofline analysis.                                     | Reads runtime resources; does not trigger binding, building or tuning.          |
+
+The contract supplies validation rules; the runtime applies them around execution and returns a record after result validation. Target routing selects who serves the whole op; kernel selection chooses an implementation within the built-in path. Both belong to the runtime.
+
+### Class structure
+
+![Op class diagram](diagrams/op-base.svg)
+
+[PlantUML source](diagrams/op-base.puml). Solid diamonds denote composition, a hollow triangle inheritance, solid arrows associations, and dashed arrows dependencies.
+
+Members use Python conventions: `_name` denotes an internal interface, `ClassVar` a class attribute, and `[property]` a property. The italic `_eager_forward()` is an abstract extension hook implemented by subclasses and called by the runtime. These conventions imply no enforced access restriction; `__call__()` is Python's callable protocol.
+
+- `Op` is the public facade. Concrete ops inherit it and supply the built-in computation.
+- `OpContract` holds shared definitions for one concrete op class. `Op` holds normalized, immutable `_params` and the derived `_construction_facts` returned by `check_construction()`.
+- Each `Op` owns one `OpRuntime` and one `OpObservation`. These components are composed, with no inheritance between them.
+- `OpRuntime.execute()` validates and executes the call, returning its result and completed `CallRecord`. It owns caches, sub-ops, tuning and failure recovery.
+- `Op._invoke()` passes successful records to `OpObservation`, which queries runtime resources and uses the contract's roofline definition. `CallRecord` is data, and may also be referenced by a parent's stage record.
+
+The runtime does not depend on observation; the facade connects them. Public helpers delegate to the appropriate component. `_eager_forward()` supplies the built-in body; entry adapters determine whether that body runs eagerly or is traced as a composition.
+
+The implementation is organized under `src/tileops/ops/`:
+
+| Module                  | Contents                                                                     |
+| ----------------------- | ---------------------------------------------------------------------------- |
+| `op_base.py`            | `Op`, public adapters and the computation hook.                              |
+| `_op_contract.py`       | `OpContract` and the immutable `CallRecord` data model.                      |
+| `_op_runtime.py`        | `OpRuntime`, acquisition, active call scopes and failure cleanup.            |
+| `_op_observation.py`    | `OpObservation`, retained records and read-only analysis.                    |
+| `_signature_codegen.py` | Generates contract functions and entry adapters; owns no instance state.     |
+| `compile_boundary.py`   | Resolves instance handles for custom operators; owns no execution resources. |
+
+Generated checks return facts to their caller instead of assigning attributes on `Op`. The runtime passes checked facts to execution and builds a record only after result validation. Contract and record types do not import runtime or observation.
+
+### Construction and call lifecycle
+
+Concrete constructors normalize parameters, including values supplied by injected collaborators, then pass them to `Op.__init__()` for contract validation. The validated parameters and their derived facts are fixed together; named parameter properties read `_params`. Runtime initialization, delegate wiring and instance registration follow validation; none rewrites semantic parameters. Shared contract caches contain only definitions and generated code.
+
+`Op._invoke()` runs one lifecycle: validate inputs, open a call scope, acquire execution resources, execute, validate results, finalize a record and publish it. The scope closes in `finally`, including on interruption. Signature checks cover shape, dtype and declared effects; metadata-value predicates marked as caller obligations remain caller obligations.
+
+Initial target binding and newly acquired resources remain provisional until the call succeeds. Failure discards that call's provisional state, preserves earlier committed resources and `last_call`, and leaves initial binding retryable. Each child call commits independently: a later parent failure does not undo a completed child. Recovery concerns runtime state; writes already made to caller tensors are not rolled back.
+
+| Entry              | Execution and observation                                                                                                                                                                                                                |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Eager call         | `_invoke()` executes and publishes a checked record. Ops without tensor inputs use their declared device.                                                                                                                                |
+| Compile boundary   | Generated `forward()` selects a custom operator; its real body enters `_invoke()` outside tracing.                                                                                                                                       |
+| Traced composition | `forward()` exposes the built-in composition and existing child ops. Tracing performs no resource acquisition or record publication; child boundaries record their real executions. No parent execution record is inferred from tracing. |
+| Empty call         | If every declared write has zero elements, construct the contract-defined result and publish an `empty` record without binding or building.                                                                                              |
+| Meta/fake call     | Infer and validate through the contract, without runtime acquisition or replacing `last_call`.                                                                                                                                           |
+
+A composite requiring whole-op target dispatch or a parent record during compiled execution declares a compile boundary. `_eager_forward()` may be traced only when it is a composition without eager resource acquisition.
+
+### Execution observation
+
+Observation exposes two views:
+
+- **Current resources:** target, built kernels, sub-ops and configurations, queried from the runtime without duplicating its caches.
+- **Last successful call:** immutable parameters and checked call facts, shapes, dtypes, effects, metadata and completed stage calls, retained for analysis.
+
+A built kernel need not have run in the latest call. After successful A and B calls, both specializations may be cached while `last_call` describes B. A failed C call leaves that record unchanged; resource rollback is a separate runtime decision.
+
+`CallRecord` is immutable data with a completion kind (`executed` or `empty`). It retains only metadata needed for analysis, captured as stable summaries or private tensor snapshots at the point the effect rules describe. Caller mutation cannot change an earlier record. Capturing GPU metadata does not require converting it to host values on every call; analysis may synchronize when reading it. A record certifies successful dispatch and result validation, not device synchronization or elapsed time.
+
+Stage records contain completed calls in order, attributed to the invocation's stage rather than the child's object identity. A shared child can serve multiple stages. Children used on a different branch contribute no calls to the current record.
+
+Roofline functions belong to the contract and consume the record, including routing metadata and partial writes. A read/write split that cannot be derived is unavailable, rather than estimated by subtracting the full size of a mutated tensor.
+
+`last_call` describes call semantics and completed stage calls. `run_config()` reports instance configuration or the first configured kernel, which may differ from the latest call's configuration. Roofline derives work and theoretical traffic; timing requires separate measurement.
+
+### State and lifecycle rules
+
+| State                                             | Owner and lifetime                                                                               |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Rules and generated functions                     | Shared contract; independent of instance target and resources.                                   |
+| Parameters and construction facts                 | `Op`; fixed after construction. Changing semantic parameters creates a new instance.             |
+| Target binding and cached entries                 | Runtime; committed resources survive later failed calls. Changing target creates a new instance. |
+| Active facts, provisional entries and stage calls | Runtime call scope; always closed, never used as `last_call`.                                    |
+| Completed record                                  | Observation; replaced only by a successful real or empty call.                                   |
+
+Queries acquire no resources; views show only entries already held, including children wired at construction. Before the first completed call, `last_call` raises `RuntimeError`. Instance handles are registered lazily after construction succeeds, retain instances weakly and are never reused for another instance.
+
+Tests cover construction consistency, borrowed delegates, failures and interruption, stable records, and cold eager/compile, empty and meta paths.
+
 ### Class hierarchy
 
 ```
-Op                          ← L1: thin base, shared by all ops
-  └── FamilyBase            ← L2: family-specific forward() flow (optional)
+Op                          ← L1: shared host-side infrastructure
+  └── FamilyBase            ← L2: shared computation body (optional)
         └── ConcreteOp      ← L3: leaf class emitted by the scaffold
 ```
 
-- **L1 (`Op`):** shared host-side plumbing (dispatch, get-or-build kernel caching, kernel enumeration, autotune) plus the methods generated from the manifest signature: the call checks, `_infer_output_shapes`, `_validate_dtypes` and `eval_roofline`.
-- **L2 (`FamilyBase`):** per-family shared `forward()` pipeline (one per family). **Not produced by this playbook** — see [Family-Base Refactoring](#family-base-refactoring).
+- **L1 (`Op`):** coordinates contract, runtime and observation, and exposes the methods generated from the manifest signature, including `_infer_output_shapes`, `_validate_dtypes` and `eval_roofline`.
+- **L2 (`FamilyBase`):** per-family shared `_eager_forward()` pipeline (one per family). **Not produced by this playbook** — see [Family-Base Refactoring](#family-base-refactoring).
 - **L3 (`ConcreteOp`):** this playbook's target. New ops start by inheriting L1 directly (T2 shape); see [Family-Base Refactoring](#family-base-refactoring) for when a family graduates to L2.
 
 ### Execution timing
@@ -28,9 +118,9 @@ Op                          ← L1: thin base, shared by all ops
 
 **An output dtype is a dtype expression of the signature** — a `DType` index solved from the inputs, a constant, a dtype primitive, or a dtype parameter the caller passes at construction ([manifest.md](manifest.md#dtypes)).
 
-The kernel is dtype-specialized, so this makes kernel construction uniformly deferred to the first `forward()` — for fixed-rank and arbitrary-rank ops alike — keyed by every input that selects a specialization, dtype among them. `dispatch_kernel()` stays in `__init__`: resolving the kernel *class* needs no tensor. It also needs no device, and must not ask for one — see [Kernel selection](#kernel-selection).
+Kernel construction is deferred until a call needs a specialization, keyed by every input that selects it, dtype among them. `Op.__init__()` installs the kernel map without building entries or querying a device — see [Kernel selection](#kernel-selection).
 
-The generated `_validate_dtypes` is the only dtype gate, and it runs on every `forward()` call: validity depends on the tensors passed, and an op has no constructed dtype to compare them against. Roofline timing and formula semantics are in [roofline.md](roofline.md); see [Parameter Design](ops-design-reference.md#parameter-design) for fixed-rank vs arbitrary-rank details and [Codegen Details](ops-design-reference.md#codegen) for calling conventions.
+The contract supplies dtype checks at real and fake call boundaries; computation bodies repeat none. Traced compositions expose child contracts rather than entering Python lifecycle machinery. Roofline timing and formula semantics are in [roofline.md](roofline.md); see [Parameter Design](ops-design-reference.md#parameter-design) for fixed-rank vs arbitrary-rank details and [Codegen Details](ops-design-reference.md#codegen) for calling conventions.
 
 ### Kernel selection
 
@@ -76,17 +166,23 @@ The identity is opaque to L1 and must carry every input that can change what get
 
 The entry, not the kernel, is the unit built once. A specialization that must build several kernels together returns them as one immutable entry from one factory; kernels keyed independently of each other are separate interfaces.
 
+Reusable auxiliary tensors, such as RoPE frequency tables, use `resource_for(key, build)`. The key includes their purpose and every varying construction input, including device and dtype. These runtime-owned entries follow the same provisional/committed lifetime as kernels. Implementation-specific scratch buffers and ABI placeholders belong inside the kernel entry. Cached semantic resources are read-only; mutable execution buffers are call-local.
+
 `iter_kernels()` enumerates entries and delegates explicitly, never by reflecting over attributes. Reflection could only guess: a kernel nested deeper than the traversal went, or held in an attribute of an unrecognised type, was silently invisible. Declaring turns that silent omission into a missing declaration.
 
 **Sub-ops follow the rule for kernels.** A sub-op's constructor arguments may come from the call, so an instance built at construction cannot show what a composite holds.
 
 - A composite declares the sub-op classes it may hold in `delegate_types`: its composition is a fact of the class, checkable before any call.
-- It holds every sub-op through `delegate_for`, once per identity, whether the sub-op is built at construction, built per call or injected. The sub-op inherits the composite's execution policy.
+- It holds every sub-op through `delegate_for`, once per stage and identity. Created children inherit the parent's execution policy. Injected children are borrowed: their configuration is checked for compatibility, never overwritten, and parent cleanup never resets them.
 - `kernel_delegates()` is derived from what `delegate_for` holds, so enumeration is complete by construction and a composite never overrides `autotune()`.
 
 `delegate_for` is eager, like `kernel_for`: a sub-op that depends on the call is built in `_eager_forward`, never on a traced path.
 
-`built_kernels(interface)` is the backend-neutral view: one entry per identity, whoever built it. `iter_kernels()`, and through it `autotune()` and `run_config()`, act on the TileOPs `Kernel` instances the entries hold. A target's builder is not passed `tune`, so a tuning request that cannot reach it warns instead of being dropped.
+`call_delegate(stage, key, inputs)` invokes an acquired child with explicit stage attribution. In a traced composition it reduces to the child call without manipulating Python observation state. Non-Op collaborators, such as prepare/finalize strategies, remain ordinary domain objects.
+
+`built_kernels(interface)` is the backend-neutral view: one entry per identity, whoever built it. `iter_kernels()` and `run_config()` can inspect owned and borrowed children. `autotune()` mutates only owned entries and children; callers tune borrowed children explicitly. Support is an entry capability, so an unsupported request reports that outcome without an Op-specific override. A target that cannot receive tuning requests reports the same limitation.
+
+An extra public operation, such as weight repacking, has an explicit contract and target policy. It is either a separate Op using the same lifecycle or an implementation helper tied to its kernel's layout; it does not silently bypass whole-op target selection.
 
 ## Scaffolding an Op from a Manifest Entry
 
@@ -168,41 +264,45 @@ def __init__(
         kernel_map: Optional override for kernel dispatch.
         tune: Whether to autotune (default False).
     """
-    self.dim = dim
-    self.target = target
-    self.tune = tune
-    self.dispatch_kernel(kernel_map)
+    super().__init__(
+        params={"dim": dim}, target=target, kernel_map=kernel_map, tune=tune
+    )
 ```
 
 **Validation.** Every `__init__` kwarg has an `Args:` entry in its docstring; no extras. `__init__` matches `signature.params` item by item ([manifest.md](manifest.md#parameters)), followed by the table-7 execution-policy parameters it takes. `dtype` is not a kwarg — it is read from the input in `forward()`. A param declaring `kw_only: true` goes after `*`.
 
 **Reference.** [Slot S12](op-slot-rules.md#slot-s12), [S13](op-slot-rules.md#slot-s13).
 
-### Step 4: `kernel_types` + `interfaces` + `forward`
+### Step 4: `kernel_types` + `interfaces` + `_eager_forward`
 
 **Input.** `signature.inputs`; the kernels and kernel interfaces of Step 1.
 
-**Optional inputs.** An `optional: true` input takes a `None` default in `forward`, and presence is read from the call rather than settled at construction, so one instance serves both ways of calling the op. Where the presence changes what gets built, it belongs in the kernel cache key alongside the shapes.
+**Optional inputs.** An `optional: true` input takes a `None` default in `_eager_forward` and the generated public adapter. Presence is read from the call rather than settled at construction. Where presence changes what gets built, it belongs in the kernel cache key alongside the shapes.
 
 **Output.**
 
 ```python
-    kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {"example_cumsum_fwd": ExampleCumsumKernel}
+class ExampleCumsumFwdOp(Op):
+    kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
+        "example_cumsum_fwd": ExampleCumsumKernel
+    }
     interfaces: ClassVar[Mapping[str, type[KernelInterface]]] = {
         "example_cumsum_fwd": ExampleCumsumFwdInterface
     }
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def _eager_forward(self, x: torch.Tensor) -> torch.Tensor:
         # The generated signature checks have run: dtype, shape, dim range.
         dim = normalize_axis(self.dim, x.ndim)
-        x = x.contiguous()          # handed over as the manifest declares it
-        call = ExampleCumsumCall(device=x.device, shape=tuple(x.shape), dim=dim, dtype=x.dtype)
+        x = x.contiguous()  # handed over as the manifest declares it
+        call = ExampleCumsumCall(
+            device=x.device, shape=tuple(x.shape), dim=dim, dtype=x.dtype
+        )
         return self.kernel_for("example_cumsum_fwd", call)(x)
 ```
 
 **Validation.**
 
-- `forward` repeats no check the signature states. It checks no device kind: a kernel states which devices it runs on.
+- `_eager_forward` repeats no check the signature states. It checks no device kind: a kernel states which devices it runs on.
 - The kernel comes from `self.kernel_for`, never a cache dict the op owns:
   - The call spec carries `x.dtype`, so a call with another dtype resolves a second entry rather than reusing the first. The implementation's own `entry_for` names what it is built from; the op defines none.
 - The op never trims kernel output, and never reshapes its input for the kernel: a kernel that pads or permutes internally takes and returns the shapes the manifest declares.
@@ -219,7 +319,7 @@ def __init__(
 
 **Reference.** [Slot S17](op-slot-rules.md#slot-s17), [S18](op-slot-rules.md#slot-s18), [S19](op-slot-rules.md#slot-s19).
 
-**Compute roof.** `Op.compute_roof()` names the GPU-profile unit that prices the FLOPs `eval_roofline()` counts; the base default `"cuda_core.fp32"` covers CUDA-core fp32 arithmetic. An op whose FLOPs are matmul contractions overrides it — normally `tensor_core_roof` of the contraction's input dtype read from `self.last_call`, branching on instance state (a backend switch) where the contraction dtype differs from the input dtype. Contract and rationale: [`roofline.md §1.4`](roofline.md#14-compute-roof).
+**Compute roof.** The contract's roofline definition includes a function of `CallRecord` naming the GPU-profile unit; the default is `"cuda_core.fp32"`. Matmul definitions select `tensor_core_roof` from the recorded contraction dtype. `Op.compute_roof()` and `eval_roofline()` delegate to observation; metric functions read no mutable instance state. Formula semantics: [`roofline.md §1.4`](roofline.md#14-compute-roof).
 
 ### Step 6: Package registration
 
@@ -279,7 +379,7 @@ Contract for every op registered for `fullgraph=True` compilation while resolvin
 
 - A class declaring `compile_boundary = True` claims `fullgraph=True` support. The manifest records nothing; the registered compile tests are the evidence, and their set equals the implemented classes declaring a boundary.
 - The operators are generated from the manifest entry, one `torch.library.custom_op` per effect branch ([manifest.md § Effects](manifest.md#effects)), so no op writes registration code and a schema cannot drift from its entry. The operator is what makes the graph node this op's, and it stays the same node when a target serves the op.
-- `forward` only chooses which operator to call. The operator's eager body runs the generated checks once, then the in-tree kernels (`_eager_forward`) or the target; its fake comes from the signature.
+- Generated `forward` chooses which operator to call. Its real body enters `_invoke()` for validation, target dispatch and recording; its fake uses only the contract and never publishes an execution record.
 - An op's operators write exactly the inputs the manifest marks `mutated`; the validator holds them equal.
 - The operator's name is derived from the family and the class; an op does not choose it.
 - The boundary covers forward-only compilation. No operator carries an autograd formula, so a backward op's operator refuses an input that tracks history; a caller that needs to backpropagate wires its own `torch.autograd.Function` around the forward and backward ops.
@@ -287,7 +387,7 @@ Contract for every op registered for `fullgraph=True` compilation while resolvin
 
 ## Family-Base Refactoring
 
-The scaffold emits T2 (L1-direct) ops only; once a family accumulates 2-3 ops sharing an identical `forward()` flow, a separate family-specific refactoring, outside this playbook, extracts an L2 base and rewrites the concrete ops as T1 thin wrappers — see [Development Path](ops-design-reference.md#development-path) for when to extract and [Adding a New Family Base](ops-design-reference.md#adding-a-new-family-base) for the process. Family bases MUST NOT normalize genuine per-op behavior differences.
+The scaffold emits T2 (L1-direct) ops only; once a family accumulates 2-3 ops sharing an identical `_eager_forward()` flow, a separate family-specific refactoring, outside this playbook, extracts an L2 base and rewrites the concrete ops as T1 thin wrappers — see [Development Path](ops-design-reference.md#development-path) for when to extract and [Adding a New Family Base](ops-design-reference.md#adding-a-new-family-base) for the process. Family bases MUST NOT normalize genuine per-op behavior differences.
 
 ## Further Reference
 

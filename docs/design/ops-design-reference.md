@@ -20,26 +20,28 @@ Per-family protocol variables, declared by L2 bases and overridden by L3 ops.
 
 ### `Op` base class interface ([`src/tileops/ops/op_base.py`](../../src/tileops/ops/op_base.py))
 
-Abstract interface: `forward()`. Methods generated from the manifest entry: the construction and call checks, `_infer_output_shapes`, `_validate_dtypes`, `eval_roofline`.
+Abstract computation hook: `_eager_forward()`. `Op` supplies `__call__()` and the public `forward()` adapter. Generated construction, input, output and roofline functions belong to `OpContract`; public inference and analysis methods delegate through the facade. Component ownership is defined in [Class structure](ops-design.md#class-structure).
 
 - `kernel_types` (class attribute) is the one declaration of an op's dispatch keys; `default_kernel_map` (property) is derived from it. `interfaces` (class attribute) maps each place the op calls a kernel to its kernel interface. Each op class created adds its keys to a set `op_base` holds, and a `kernel_map` override naming a key outside that set is refused.
 - `delegate_types` (class attribute) is the one declaration of the sub-ops an op may hold: stage name to op class, in stage order. Default empty.
-- `last_call` (property) is the `SignatureCall` of the op's last successfully completed call: its `ix`, tensors, effects, metadata tensors, and the checked calls its sub-ops completed during it, by stage. It raises `RuntimeError` before one completes. `eval_roofline` prices it.
+- `last_call` (property) is the immutable `CallRecord` of the last successfully completed real or empty call: its parameters, checked indices, shapes, dtypes, effects, metadata snapshots and completed stage calls. It raises `RuntimeError` before one completes. Meta/fake inference leaves it unchanged. `eval_roofline` prices it.
 
 #### Kernel caching and enumeration methods
 
 Rationale and the interface / entry vocabulary: [ops-design.md § Kernel caching and enumeration](ops-design.md#kernel-caching-and-enumeration).
 
-| Method                                   | Purpose                                                                                                                                                       |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kernel_for(interface, call)`            | The in-tree entry serving this call, resolved once per call spec. The only way an op's in-tree implementation reaches a kernel; a target serves the whole op  |
-| `select_implementation(interface, call)` | The key of the interface's implementation that serves the call. Introspection and tests; `kernel_for` asks it on a miss                                       |
-| `built_kernels(name)`                    | Read-only view of a name's entries, whoever built them; empty before its first build. Introspection only, never dispatch                                      |
-| `delegate_for(stage, key, ...)`          | The sub-op held for a stage and identity, built once on a miss with the op's execution policy. The only way an op holds a sub-op                              |
-| `kernel_delegates()`                     | The sub-ops `delegate_for` holds, in stage order. Derived; never overridden                                                                                   |
-| `iter_kernels()`                         | The TileOPs `Kernel` instances the entries hold, deduplicated: interface entries, `self.kernel`, and delegates. What `autotune()` tunes                       |
-| `settled_target`                         | What a call settled the op on: `None` before, `BUILTIN` for the in-tree implementation, else the target's name                                                |
-| `autotune()`                             | Puts the op in tuned mode: tunes built kernels, and sets `tune`, under which every later in-tree build is tuned as it is built; a target is not passed `tune` |
+| Method                                   | Purpose                                                                                                                                                      |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `kernel_for(interface, call)`            | The in-tree entry serving this call, resolved once per call spec. The only way an op's in-tree implementation reaches a kernel; a target serves the whole op |
+| `select_implementation(interface, call)` | The key of the interface's implementation that serves the call. Introspection and tests; `kernel_for` asks it on a miss                                      |
+| `built_kernels(name)`                    | Read-only view of a name's entries, whoever built them; empty before its first build. Introspection only, never dispatch                                     |
+| `resource_for(key, build)`               | Acquires a reusable auxiliary resource through the runtime; the key includes every varying construction input.                                               |
+| `delegate_for(stage, key, ...)`          | Acquires a child by stage and identity; created children are owned, injected children are borrowed.                                                          |
+| `call_delegate(stage, key, inputs)`      | Invokes an acquired child with explicit stage attribution.                                                                                                   |
+| `kernel_delegates()`                     | The sub-ops `delegate_for` holds, in stage order. Derived; never overridden                                                                                  |
+| `iter_kernels()`                         | Read-only enumeration of kernel instances in entries and delegates, deduplicated, including borrowed children.                                               |
+| `settled_target`                         | What a call settled the op on: `None` before, `BUILTIN` for the in-tree implementation, else the target's name                                               |
+| `autotune()`                             | Requests tuning of owned entries and future builds. Borrowed children are unchanged; unsupported entries or targets report the limitation.                   |
 
 ### `Kernel` base class attributes ([`src/tileops/kernels/kernel_base.py`](../../src/tileops/kernels/kernel_base.py))
 
@@ -94,23 +96,23 @@ Two time points: `__init__` takes `signature.params`, construction-time tensors 
 ### Calling conventions
 
 - **Kernel construction:** in `_eager_forward`, through `kernel_for` — never in the traced `forward`, which is one call to the op's operator ([Compile Dispatch Boundary](ops-design.md#compile-dispatch-boundary)). See [Slot S16](op-slot-rules.md#slot-s16).
-- **`_validate_dtypes`:** runs on every call, and is the only place an op rejects a dtype.
+- **`_validate_dtypes`:** exposes the contract's dtype gate; real and fake boundaries apply it, while computation bodies repeat no dtype checks.
 - **Non-runtime consumers** (validator, graph compiler): call `_infer_output_shapes` with concrete shape tuples, and the input dtypes (keyword `dtypes`) where an output shape reads a dtype index, without constructing tensors. Roofline consumers use interfaces in [`roofline.md`](roofline.md).
 
 ## Development Path (Appendix) <a id="development-path"></a>
 
 Pragmatic sequence:
 
-1. **New op inherits L1 directly (T2).** When a family has 1-2 ops, the op owns its full `forward()`. Transitional state.
-1. **Family accumulates ops.** When 2-3 ops share identical `forward()` flow, extract an L2 family base.
+1. **New op inherits L1 directly (T2).** When a family has 1-2 ops, the op owns its full `_eager_forward()` body.
+1. **Family accumulates ops.** When 2-3 ops share identical `_eager_forward()` flow, extract an L2 family base.
 1. **L1-direct and L1→L2→L3 coexist.** L1-direct ops are candidates for future L2 extraction, not an alternative design.
 
-Create an L2 family base when multiple ops share the same `forward()` control flow, the shared boilerplate is substantial, and per-op differences fit into class variables or hooks. Do NOT create one when only 1 op uses the pattern, ops share math but differ in flow, or a common base would need excessive `if/else`.
+Create an L2 family base when multiple ops share the same `_eager_forward()` control flow, the shared boilerplate is substantial, and per-op differences fit into class variables or hooks. Do NOT create one when only 1 op uses the pattern, ops share math but differ in flow, or a common base would need excessive `if/else`.
 
 ### Adding a new family base <a id="adding-a-new-family-base"></a>
 
 1. Implement 2-3 concrete T2 ops to understand the pattern before abstracting.
-1. Identify shared `forward()` steps.
+1. Identify shared `_eager_forward()` steps.
 1. Extract shared steps into the base; lift per-op differences into class variables or overridable hooks (see [Family-Base Protocol (Appendix)](#base-class-protocol) and [Optional Hooks (Appendix)](#optional-hooks-appendix)).
 1. Migrate existing ops; verify tests pass unchanged.
 1. Register any new protocol variables in the Family-Base Protocol table.

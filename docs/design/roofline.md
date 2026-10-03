@@ -65,7 +65,7 @@ Beyond the elementwise rule, `total_flops` is the least arithmetic of the algori
 `Op.compute_roof()` returns the GPU-profile key (§5.1) of the unit that prices the op's FLOPs — `"cuda_core.fp32"`, `"tensor_core.bf16"`, `"tensor_core.fp8"`, ….
 
 - The key states the unit an **optimal** implementation would use, declared by the op author in code. It is never inferred from the running kernel — that would price a kernel on the wrong unit against the wrong ceiling and hide exactly the gap the metric exists to expose. Nor from the input dtype alone — an fp8-backend attention takes fp16/bf16 tensors.
-- The base default covers every op whose arithmetic runs on CUDA cores in fp32 (elementwise, reductions, norms, scans). An op whose FLOPs are matmul contractions overrides it; one whose unit depends on instance state (a backend switch, a quantized path) branches on that state.
+- The contract default covers CUDA-core fp32 arithmetic (elementwise, reductions, norms, scans). Matmul contracts supply a function of `CallRecord`; a backend or quantization choice affecting the compute unit is captured in that record, never read from mutable instance state.
 - The declaration is valid whenever `eval_roofline()` is — after the op's dtype is bound.
 - A wrong or missing override prices the op against the wrong ceiling. The physics check (§4.3) reports it once the implied rate breaches that ceiling, which a kernel far from its own roof does not reach.
 
@@ -178,7 +178,7 @@ Analysis and emission are separate: analysis reads the entry and decides, emissi
 
 #### 4.4.1 Generated Method
 
-Every manifest entry is served by a generated `eval_roofline()` returning `(flops: int, bytes: int)`. The method belongs to that entry: a subclass with its own entry receives its own evaluator rather than inheriting another entry's formula. It is emitted per discriminant point, like the call checks, and evaluates over the op's last completed call. The signature is part of the shared Op interface defined in [ops-design-reference.md](ops-design-reference.md).
+Every manifest entry has a generated evaluator in its `OpContract`, returning `(flops: int, bytes: int)`. A subclass with its own entry receives its own evaluator rather than inheriting another entry's formula. It is emitted per discriminant point, like the call checks. `Op.eval_roofline()` delegates to observation, which applies that evaluator to the last completed `CallRecord`. The public signature is defined in [ops-design-reference.md](ops-design-reference.md).
 
 #### 4.4.2 Manifest Inputs
 
@@ -190,13 +190,13 @@ The primitive set ([manifest.md § Derived Indices and Primitives](manifest.md#d
 
 #### 4.4.4 Evaluation Timing
 
-`eval_roofline()` is valid once a call has completed; it prices `Op.last_call`, part of the `Op` base class interface in [ops-design-reference.md](ops-design-reference.md). The dtype is always call-bound, so no op can be priced before its first `forward()`; an arbitrary-rank op's dynamic dims are bound there too. The method recomputes on each call and holds no cache: a cached `(flops, bytes)` would outlive the shapes it was computed for. A call on meta tensors holds no values; a formula that reads metadata values raises `OpNotAvailableError` on it.
+`eval_roofline()` prices `Op.last_call` after a real or empty call completes. It recomputes from the immutable record, including stable metadata snapshots, and holds no result cache. Meta/fake inference does not replace `last_call`; analysis still refers to the previous completed call, or raises `RuntimeError` if none exists.
 
 A consumer that is not the op itself instantiates the Op or reads pre-computed `(flops, bytes)` from benchmark output.
 
 #### 4.4.5 Evaluator Surface Boundary
 
-Roofline expressions live in exactly one place at runtime: the plain Python body of each op's `eval_roofline()`. Two surfaces are rejected and must not be built — an op-local AST evaluator, and a manifest-level roofline evaluator that any consumer could call for `(flops, bytes)`.
+Roofline expressions live in exactly one place at runtime: the generated Python functions in `OpContract`. The public `Op.eval_roofline()` facade and observation invoke those functions without copying formulas. Neither an op-local AST evaluator nor a second manifest-level evaluator is exposed to consumers.
 
 Neither the generated body nor anything else parses, AST-analyzes or evaluates a formula string at run time. The name and form check happens once, before emission, which copies the checked expressions into plain Python.
 
