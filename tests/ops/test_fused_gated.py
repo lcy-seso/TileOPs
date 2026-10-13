@@ -63,6 +63,16 @@ def test_silu_and_mul_matches_torch_at_every_bfloat16_gate() -> None:
     TestBase.check(workload, SiluAndMulFwdOp(), *workload.gen_inputs())
 
 
+@pytest.mark.smoke
+def test_silu_and_mul_input_off_a_vector_boundary() -> None:
+    """A contiguous input starting one element past a 16-byte boundary matches the reference."""
+    test = SiluAndMulTest(64, 1024, torch.bfloat16)
+    (aligned,) = test.gen_inputs()
+    x = torch.empty(aligned.numel() + 1, device=run_device(), dtype=aligned.dtype)[1:]
+    x = x.view(aligned.shape).copy_(aligned)
+    test.check(SiluAndMulFwdOp(), x)
+
+
 class GeluAndMulFixture(FixtureBase):
     PARAMS = [
         (
