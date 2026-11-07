@@ -92,8 +92,7 @@ def fast_quotient(dtype: str, num, den):
     magnitudes in ``[2**-31, 2**33)``, where every nonzero intermediate is a normal
     float, so the value scales with the operands' exponents; it equals the IEEE quotient
     for all 2**46 pairs of significands. The test is bits 31 and 30 of
-    ``2 * bits - 0x60000000``, clear for both operands, which nvcc folds into one OR a
-    thread.
+    ``2 * bits - 0x60000000``, clear for both operands.
 
     bfloat16 takes ``num * rcp(den)``, which rounds to torch's bfloat16 for all 2**32
     operand pairs with a divisor magnitude in ``[2**-126, 2**126)``, where the reciprocal
