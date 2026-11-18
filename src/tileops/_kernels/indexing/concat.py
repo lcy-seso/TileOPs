@@ -69,10 +69,8 @@ def _concat_kernel(vec, dtypes, out_dtype):
     # Small CTAs spread a decode row's few hundred vectors over the SMs, and 16 of them fill
     # an SM's 2048 resident threads.
     threads = 128
-    # A thread copies `per_thread` vectors, one CTA width apart, so each warp instruction stays
-    # contiguous. An input narrower than the output reads that fraction of each vector's
-    # output bytes; with a whole 16-byte output vector, `per_thread` restores 16 bytes of the
-    # launch's narrowest input per thread.
+    # A thread copies `per_thread` vectors one CTA width apart, so each warp access stays
+    # contiguous and, with 16-byte output vectors, a thread reads 16 bytes of the narrowest input.
     per_thread = DataType(out_dtype).bits // min(DataType(d).bits for d in dtypes)
     span = threads * per_thread
     rows = T.dynamic("rows", "int64")
@@ -86,7 +84,8 @@ def _concat_kernel(vec, dtypes, out_dtype):
         offset.append(offset[k] + cols[k])
     # An input whose vector is a whole 16-byte access reads it with an L2 hint.
     whole = [vec * DataType(d).bits == VECTOR_ACCESS_BYTES * 8 for d in dtypes]
-    # An output vector that is a whole 16-byte access is written by one 16-byte store.
+    # An output vector that is a whole 16-byte access is written by one `T.stg128`: a
+    # vectorized store of it compiles to four 4-byte stores.
     whole_out = vec * DataType(out_dtype).bits == VECTOR_ACCESS_BYTES * 8
 
     def slot(k):
@@ -114,11 +113,9 @@ def _concat_kernel(vec, dtypes, out_dtype):
                         wide = T.alloc_local((vec,), out_dtype)
                         for v in T.vectorized(vec):
                             wide[v] = T.cast(held[u, v], out_dtype)
-                        T.call_extern(
-                            "handle",
-                            "tileops::store16_global",
-                            T.address_of(out[r, base + offset[k] + c, 0]),
-                            T.address_of(wide[0]),
+                        T.stg128(
+                            out[r, base + offset[k] + c, 0],
+                            T.reinterpret("uint32x4", wide[T.Ramp(0, 1, vec)]),
                         )
                     else:
                         for v in T.vectorized(vec):
@@ -147,7 +144,7 @@ def _concat_kernel(vec, dtypes, out_dtype):
     return tilelang.compile(
         concat,
         out_idx=[],
-        compile_flags=csrc_include("streaming_load.h", "vector_store.h"),
+        compile_flags=csrc_include("streaming_load.h"),
         # Every access is inside its tensor by the `c < cols[k]` guard; the checks TileLang
         # would add for the dynamic `base` repeat it on each store.
         pass_configs={tilelang.PassConfigKey.TL_DISABLE_SAFE_MEMORY_ACCESS: True},
