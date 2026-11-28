@@ -16,17 +16,15 @@ class TopKSelectTest(TopKSelectWorkload, TestBase):
 class TopKSelectFixture(FixtureBase):
     PARAMS = [
         (
-            "batch, seq_len, seq_len_kv, kv_group, topk, in_dtype, out_dtype, tune",
+            "batch, seq_len, seq_len_kv, kv_group, topk, in_dtype_str, out_dtype_str, tune",
             [
                 pytest.param(
-                    4, 256, 1024, 1, 32, torch.float32, torch.int32, False, marks=pytest.mark.smoke
+                    4, 256, 1024, 1, 32, "float32", "int32", False, marks=pytest.mark.smoke
                 ),
-                pytest.param(
-                    8, 512, 2048, 1, 64, torch.float32, torch.int32, True, marks=pytest.mark.full
-                ),
+                pytest.param(8, 512, 2048, 1, 64, "float32", "int32", True, marks=pytest.mark.full),
                 # Enough rows to skip the register kernel, past 2048 keys: 512-thread blocks.
                 pytest.param(
-                    4, 128, 8192, 1, 512, torch.float32, torch.int32, False, marks=pytest.mark.full
+                    4, 128, 8192, 1, 512, "float32", "int32", False, marks=pytest.mark.full
                 ),
                 # 8 GiB and 16 GiB of scores.
                 pytest.param(
@@ -35,8 +33,8 @@ class TopKSelectFixture(FixtureBase):
                     64 * 1024,
                     1,
                     1024,
-                    torch.float32,
-                    torch.int32,
+                    "float32",
+                    "int32",
                     False,
                     marks=pytest.mark.nightly,
                 ),  # fmt: skip
@@ -46,8 +44,8 @@ class TopKSelectFixture(FixtureBase):
                     64 * 2048,
                     1,
                     2048,
-                    torch.float32,
-                    torch.int32,
+                    "float32",
+                    "int32",
                     False,
                     marks=pytest.mark.nightly,
                 ),  # fmt: skip
@@ -63,10 +61,12 @@ def test_topk_select_op(
     seq_len_kv: int,
     kv_group: int,
     topk: int,
-    in_dtype: torch.dtype,
-    out_dtype: torch.dtype,
+    in_dtype_str: str,
+    out_dtype_str: str,
     tune: bool,
 ) -> None:
+    in_dtype = getattr(torch, in_dtype_str)
+    out_dtype = getattr(torch, out_dtype_str)
     test = TopKSelectTest(batch, seq_len, seq_len_kv, kv_group, topk, in_dtype, out_dtype)
     op = TopKSelectFwdOp(top_k=topk)
     if tune:
