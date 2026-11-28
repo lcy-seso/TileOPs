@@ -174,7 +174,7 @@ def _manifest_key(op: str | type) -> str:
     return op.__name__ if isinstance(op, type) else op
 
 
-def op_class(name: str, entry: dict) -> type:
+def op_class(name: str, entry: dict[str, Any]) -> type:
     """The class of op *name*: `tileops.<family>.<name>`.
 
     The family is the entry's (docs/design/manifest.md § Top-Level Fields).
