@@ -1,13 +1,9 @@
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._ops.gemm.grouped_gemm import GroupedGEMMFwdOp
 from workloads.gemm import GroupedGEMMWorkload
-
-
-class GroupedGEMMTest(GroupedGEMMWorkload, TestBase):
-    pass
 
 
 class GroupedGEMMFixture(FixtureBase):
@@ -72,8 +68,8 @@ def test_grouped_gemm(
     trans_a: bool,
     trans_b: bool,
 ) -> None:
-    test = GroupedGEMMTest(batch_sum, batch_count, N, K, dtype, trans_a, trans_b)
-    test.check(GroupedGEMMFwdOp(trans_a=trans_a, trans_b=trans_b), *test.gen_inputs())
+    workload = GroupedGEMMWorkload(batch_sum, batch_count, N, K, dtype, trans_a, trans_b)
+    check(workload, GroupedGEMMFwdOp(trans_a=trans_a, trans_b=trans_b), *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -91,9 +87,9 @@ def test_k_grouped_gemm_with_ragged_groups(dtype: torch.dtype, trans_b: bool) ->
     output block is zero.
     """
     sizes = [100, 0, 300, 64, 7, 1]
-    test = GroupedGEMMTest(sum(sizes), len(sizes), 200, 136, dtype, True, trans_b, sizes)
+    workload = GroupedGEMMWorkload(sum(sizes), len(sizes), 200, 136, dtype, True, trans_b, sizes)
     op = GroupedGEMMFwdOp(trans_a=True, trans_b=trans_b)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 _EMPTY_ENDS = [0, 100, 0, 300, 128, 7, 64, 0]
@@ -123,9 +119,11 @@ _ONE_ROW_TILE = [40, 0, 64, 17, 60, 64, 3, 50]
 )
 def test_m_grouped_gemm_group_starts(sizes: list, n: int, k: int, trans_b: bool) -> None:
     """Groups split the rows of ``a``: the kernel reads ``batch_offsets`` as group starts."""
-    test = GroupedGEMMTest(sum(sizes), len(sizes), n, k, torch.bfloat16, False, trans_b, sizes)
+    workload = GroupedGEMMWorkload(
+        sum(sizes), len(sizes), n, k, torch.bfloat16, False, trans_b, sizes
+    )
     op = GroupedGEMMFwdOp(trans_a=False, trans_b=trans_b)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -143,6 +141,6 @@ def test_m_grouped_gemm_skewed_pingpong_tails(n: int, dtype: torch.dtype) -> Non
     256-wide tile staged by 64-column box; its last box holds 40 columns, which each group's
     ragged last tile stores in 16-byte vectors.
     """
-    test = GroupedGEMMTest(sum(_SKEWED), len(_SKEWED), n, 768, dtype, False, True, _SKEWED)
+    workload = GroupedGEMMWorkload(sum(_SKEWED), len(_SKEWED), n, 768, dtype, False, True, _SKEWED)
     op = GroupedGEMMFwdOp(trans_a=False, trans_b=True)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())

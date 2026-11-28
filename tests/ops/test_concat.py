@@ -2,22 +2,13 @@ import pytest
 import torch
 
 from tests.compile_contract import register_compile_contract
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops._kernels.indexing import ConcatKernel
 from tileops._kernels.indexing.concat import _GROUP, _THREADS
 from tileops.indexing import ConcatFwdOp
 from workloads.device import run_device
 from workloads.indexing import ConcatWorkload, TransposedConcatWorkload
 from workloads.workload_base import manifest_call
-
-
-class ConcatTest(ConcatWorkload, TestBase):
-    pass
-
-
-class TransposedConcatTest(TransposedConcatWorkload, TestBase):
-    pass
-
 
 _BF16, _FP16, _FP32 = "bfloat16", "float16", "float32"
 _SMOKE = pytest.mark.smoke
@@ -127,13 +118,13 @@ _CASES = (
 @pytest.mark.parametrize("S, dim, D", _CASES)
 def test_concat(S, dim, D) -> None:
     call = manifest_call("ConcatFwdOp", {"D": D}, S=S, dim=dim)
-    test = ConcatTest(call)
-    test.check(ConcatFwdOp(**call.arguments()), *test.gen_inputs())
+    workload = ConcatWorkload(call)
+    check(workload, ConcatFwdOp(**call.arguments()), *workload.gen_inputs())
 
 
 def _checked_launches(call, monkeypatch) -> list[tuple[str, tuple]]:
     """Check the op on *call*'s inputs, and return each launch's program build and facts."""
-    test = ConcatTest(call)
+    workload = ConcatWorkload(call)
     launches = []
     program = ConcatKernel.program
 
@@ -142,7 +133,7 @@ def _checked_launches(call, monkeypatch) -> list[tuple[str, tuple]]:
         return program(self, build, *facts)
 
     monkeypatch.setattr(ConcatKernel, "program", record)
-    test.check(ConcatFwdOp(**call.arguments()), *test.gen_inputs())
+    check(workload, ConcatFwdOp(**call.arguments()), *workload.gen_inputs())
     return launches
 
 
@@ -254,16 +245,16 @@ def test_concat_follows_each_call_shape() -> None:
     """One op joins each call's own shapes: new rows and widths, then the first call again."""
     op = ConcatFwdOp(-1)
     for S in ([[3, 40], [3, 24]], [[4, 5120], [4, 5120]], [[3, 40], [3, 24]]):
-        test = ConcatTest(manifest_call("ConcatFwdOp", {"D": [_FP16] * 2}, S=S, dim=-1))
-        test.check(op, *test.gen_inputs())
+        workload = ConcatWorkload(manifest_call("ConcatFwdOp", {"D": [_FP16] * 2}, S=S, dim=-1))
+        check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_concat_strided_elements() -> None:
     """Elements that are transposed views are joined by their logical elements."""
     call = manifest_call("ConcatFwdOp", {"D": [_BF16] * 2}, S=[[3, 40], [3, 24]], dim=1)
-    test = TransposedConcatTest(call)
-    test.check(ConcatFwdOp(1), *test.gen_inputs())
+    workload = TransposedConcatWorkload(call)
+    check(workload, ConcatFwdOp(1), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -282,6 +273,6 @@ register_compile_contract(ConcatFwdOp)
 def test_concat_compiles_cold() -> None:
     """A cold ``fullgraph=True`` compile joins the elements as the eager op does."""
     call = manifest_call("ConcatFwdOp", {"D": [_BF16, _FP16]}, S=[[3, 40], [3, 24]], dim=-1)
-    test = ConcatTest(call)
+    workload = ConcatWorkload(call)
     op = ConcatFwdOp(-1)
-    test.check(op, *test.gen_inputs(), runs=torch.compile(op, fullgraph=True))
+    check(workload, op, *workload.gen_inputs(), runs=torch.compile(op, fullgraph=True))

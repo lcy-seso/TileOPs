@@ -3,7 +3,7 @@ import torch
 
 from tests.cuda_graph_contract import CapturedGraph, check_replay
 from tests.misaligned import misaligned
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._kernels.constants import BLOCK_SHARED_BYTES_OPT_IN
 from tileops._kernels.gemm import BMMCall, BMMW8A16Call
 from tileops._kernels.gemm.w8a16 import _ring_config, _tile_config
@@ -23,18 +23,6 @@ from workloads.numerics import compare_outputs
 # Covering the [B,K,N] path is the point of these tests, so the perf hint
 # BMMFP8FwdOp emits for it is expected output, not a signal.
 pytestmark = pytest.mark.filterwarnings("ignore:BMMFP8FwdOp")
-
-
-class BMMTest(BMMWorkload, TestBase):
-    pass
-
-
-class BMMFP8Test(BMMFP8Workload, TestBase):
-    pass
-
-
-class BMMBatchStridedTest(BMMBatchStridedWorkload, TestBase):
-    pass
 
 
 def _skip_off_a_132_sm_h200(call: BMMCall) -> None:
@@ -99,8 +87,8 @@ class BMMFixture(FixtureBase):
 
 @BMMFixture
 def test_bmm(batch: int, m: int, n: int, k: int, dtype: torch.dtype) -> None:
-    test = BMMTest(batch, m, n, k, dtype)
-    test.check(BMMFwdOp(), *test.gen_inputs())
+    workload = BMMWorkload(batch, m, n, k, dtype)
+    check(workload, BMMFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -139,9 +127,9 @@ def test_bmm_wave_filling_shapes_match_the_reference(
     batch: int, m: int, n: int, k: int, dtype: torch.dtype
 ) -> None:
     """Shapes whose whole tiles fill a persistent wave on the calibrated board."""
-    test = BMMTest(batch, m, n, k, dtype)
+    workload = BMMWorkload(batch, m, n, k, dtype)
     op = BMMFwdOp()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -199,16 +187,16 @@ def test_bmm_template_runs_the_config_its_kernel_publishes(monkeypatch, batch, m
         return build(spec)
 
     monkeypatch.setattr(template, "_grouped_gemm_kernel", recording)
-    test = BMMTest(batch, m, n, k, torch.bfloat16)
-    inputs = test.gen_inputs()
+    workload = BMMWorkload(batch, m, n, k, torch.bfloat16)
+    inputs = workload.gen_inputs()
     op = BMMFwdOp()
-    test.check(op, *inputs)
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
+    check(workload, op, *inputs)
     first, again = built[0], built[-1]
     assert again == first
     (kernel,) = op.iter_kernels()
     kernel.config = {**kernel.config, "num_stages": first.num_stages - 1}
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
     assert built[-1].num_stages == first.num_stages - 1
 
 
@@ -238,8 +226,8 @@ def test_bmm_pingpong_matches_the_reference(
     call = BMMCall(batch=batch, m=m, n=n, k=k, dtype=dtype, device=run_device())
     _skip_off_a_132_sm_h200(call)
     assert op.key_for("bmm", call) == "bmm_pingpong"
-    test = BMMTest(batch, m, n, k, dtype)
-    test.check(op, *test.gen_inputs())
+    workload = BMMWorkload(batch, m, n, k, dtype)
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -276,9 +264,9 @@ def test_bmm_reads_and_writes_batch_strided_views(
     assert op.key_for("bmm", call) == key
     if tune:
         op.request_tune()
-    test = BMMBatchStridedTest(batch, m, n, k, torch.bfloat16)
-    test.check(op, *test.gen_inputs())
-    a, b = test.gen_inputs()
+    workload = BMMBatchStridedWorkload(batch, m, n, k, torch.bfloat16)
+    check(workload, op, *workload.gen_inputs())
+    a, b = workload.gen_inputs()
     rows = torch.full((m, batch, n), float("nan"), dtype=a.dtype, device=a.device)
     out = rows.transpose(0, 1)
     assert op(a, b, out=out) is out
@@ -298,8 +286,8 @@ def test_bmm_takes_operands_of_any_strides(batch: int, m: int, n: int, k: int):
     pitch and asynchronous stores take whole 16-byte steps, through contiguous copies; ``a``
     of every other element, which the op copies; and ``out`` transposed in its last two axes.
     Each gives the contiguous call's product."""
-    test = BMMTest(batch, m, n, k, torch.bfloat16)
-    a, b = test.gen_inputs()
+    workload = BMMWorkload(batch, m, n, k, torch.bfloat16)
+    a, b = workload.gen_inputs()
     op = BMMFwdOp()
     expected = op(a, b)
     a_rows = torch.zeros(batch, m, k + 4, dtype=a.dtype, device=a.device)
@@ -341,7 +329,7 @@ def test_bmm_takes_operands_of_any_strides(batch: int, m: int, n: int, k: int):
 def test_bmm_graph_replay(batch: int, m: int, n: int, k: int) -> None:
     """DeepSeek-V4-Flash's decode-step indexer scores and logits over the compressed entries of
     max_seq_len 4096 and 4128."""
-    check_replay(BMMTest(batch, m, n, k, torch.bfloat16), BMMFwdOp())
+    check_replay(BMMWorkload(batch, m, n, k, torch.bfloat16), BMMFwdOp())
 
 
 @pytest.mark.sm90
@@ -360,16 +348,16 @@ def test_bmm_graph_replay_into_batch_strided_views(batch: int, m: int, n: int, k
     """A replay reading ``a`` and writing ``out`` as batch-strided views, as DeepSeek-V4-Flash's
     decode step calls its grouped output projection: ``a`` the group-major view of the
     attention output, ``out`` that of the token-major buffer ``wo_b`` reads."""
-    test = BMMBatchStridedTest(batch, m, n, k, torch.bfloat16)
+    workload = BMMBatchStridedWorkload(batch, m, n, k, torch.bfloat16)
     op = BMMFwdOp()
-    a, b = test.gen_inputs()
+    a, b = workload.gen_inputs()
     out = torch.empty(m, batch, n, dtype=a.dtype, device=a.device).transpose(0, 1)
     graph = CapturedGraph((lambda *inputs: op(*inputs, out=out), (a, b)))
     assert graph.outputs[0] is out
-    fresh = test.gen_inputs()
+    fresh = workload.gen_inputs()
     graph.renew(fresh)
     graph.replay()
-    compare_outputs(out, test.ref_program(*fresh), test.verification(*fresh))
+    compare_outputs(out, workload.ref_program(*fresh), workload.verification(*fresh))
 
 
 class BMMFP8Fixture(FixtureBase):
@@ -421,19 +409,19 @@ def test_bmm_fp8(
     dtype: torch.dtype,
     out_dtype: torch.dtype,
 ) -> None:
-    test = BMMFP8Test(batch, m, n, k, dtype, out_dtype=out_dtype)
+    workload = BMMFP8Workload(batch, m, n, k, dtype, out_dtype=out_dtype)
     op = BMMFP8FwdOp(out_dtype=out_dtype, trans_b=False)
-    inputs = test.gen_inputs()
-    test.check(op, *inputs)
+    inputs = workload.gen_inputs()
+    check(workload, op, *inputs)
 
 
 @pytest.mark.smoke
 def test_bmm_fp8_rejects_e5m2() -> None:
     """BMMFP8FwdOp advertises fp8_e4m3fn only; e5m2 inputs must be rejected."""
-    test = BMMFP8Test(4, 128, 128, 128, torch.float8_e5m2)
+    workload = BMMFP8Workload(4, 128, 128, 128, torch.float8_e5m2)
     op = BMMFP8FwdOp(out_dtype=torch.bfloat16, trans_b=False)
     with pytest.raises(ValueError, match=r"outside \['float8_e4m3fn'\]"):
-        op(*test.gen_inputs())
+        op(*workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -451,8 +439,8 @@ def test_bmm_fp8_k_not_multiple_of_32_raises() -> None:
 @pytest.mark.smoke
 def test_bmm_fp8_nk_view_when_k_eq_n() -> None:
     batch, m, n, k = 4, 128, 128, 128
-    test = BMMFP8Test(batch, m, n, k, torch.float8_e4m3fn)
-    a, b_kn, a_scale, b_scale = test.gen_inputs()
+    workload = BMMFP8Workload(batch, m, n, k, torch.float8_e4m3fn)
+    a, b_kn, a_scale, b_scale = workload.gen_inputs()
     b_nk_view = b_kn.transpose(-2, -1)
     assert b_nk_view.shape == (batch, n, k)
     assert b_nk_view.stride(-2) == 1
@@ -466,8 +454,8 @@ def test_bmm_fp8_nk_view_when_k_eq_n() -> None:
 @pytest.mark.smoke
 def test_bmm_fp8_contiguous_nk_square_when_k_eq_n() -> None:
     batch, m, n, k = 4, 128, 128, 128
-    test = BMMFP8Test(batch, m, n, k, torch.float8_e4m3fn)
-    a, b_kn, a_scale, b_scale = test.gen_inputs()
+    workload = BMMFP8Workload(batch, m, n, k, torch.float8_e4m3fn)
+    a, b_kn, a_scale, b_scale = workload.gen_inputs()
     b_nk = b_kn.transpose(-2, -1).contiguous()
     assert b_nk.is_contiguous()
     assert b_nk.shape == (batch, n, k)
@@ -484,8 +472,8 @@ def test_bmm_fp8_kn_transpose_handles_tile_tail() -> None:
     """A contiguous [B, N, K] b gives the [B, K, N] result, on extents that leave a tail
     under every staging tile."""
     batch, m, n, k = 3, 128, 80, 160
-    test = BMMFP8Test(batch, m, n, k, torch.float8_e4m3fn)
-    a, b_kn, a_scale, b_scale = test.gen_inputs()
+    workload = BMMFP8Workload(batch, m, n, k, torch.float8_e4m3fn)
+    a, b_kn, a_scale, b_scale = workload.gen_inputs()
     b_nk = b_kn.transpose(-2, -1).contiguous()
 
     op_kn = BMMFP8FwdOp(out_dtype=torch.bfloat16, trans_b=False)
@@ -499,8 +487,8 @@ def test_bmm_fp8_kn_transpose_handles_tile_tail() -> None:
 def test_bmm_fp8_no_transpose_when_b_already_k_innermost() -> None:
     """What decides the copy is ``b``'s strides, not ``trans_b``."""
     batch, m, n, k = 4, 128, 256, 128
-    test = BMMFP8Test(batch, m, n, k, torch.float8_e4m3fn)
-    a, b_kn, a_scale, b_scale = test.gen_inputs()
+    workload = BMMFP8Workload(batch, m, n, k, torch.float8_e4m3fn)
+    a, b_kn, a_scale, b_scale = workload.gen_inputs()
     # [B, K, N] by shape, K-innermost in memory.
     b_kn_view = b_kn.transpose(-2, -1).contiguous().transpose(-2, -1)
     assert b_kn_view.stride(-2) == 1
@@ -515,11 +503,11 @@ def test_bmm_fp8_no_transpose_when_b_already_k_innermost() -> None:
 @pytest.mark.smoke
 def test_bmm_fp8_one_32_wide_k_step() -> None:
     batch, m, n, k = 8, 64, 64, 32
-    test = BMMFP8Test(batch, m, n, k, torch.float8_e4m3fn)
-    a, b_kn, a_scale, b_scale = test.gen_inputs()
+    workload = BMMFP8Workload(batch, m, n, k, torch.float8_e4m3fn)
+    a, b_kn, a_scale, b_scale = workload.gen_inputs()
     op = BMMFP8FwdOp(out_dtype=torch.bfloat16, trans_b=False)
 
-    test.check(op, a, b_kn, a_scale, b_scale)
+    check(workload, op, a, b_kn, a_scale, b_scale)
 
 
 @pytest.mark.parametrize(
@@ -527,11 +515,11 @@ def test_bmm_fp8_one_32_wide_k_step() -> None:
     [pytest.param(False, marks=pytest.mark.smoke), pytest.param(True, marks=pytest.mark.full)],
 )
 def test_bmm_fp8_under_tuning(tune: bool) -> None:
-    test = BMMFP8Test(2, 128, 144, 96, torch.float8_e4m3fn)
+    workload = BMMFP8Workload(2, 128, 144, 96, torch.float8_e4m3fn)
     op = BMMFP8FwdOp(out_dtype=torch.bfloat16, trans_b=False)
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -546,18 +534,6 @@ def test_bmm_offset_operand_runs_as_an_aligned_one(shifted: int) -> None:
     expected = op(*inputs)
     inputs[shifted] = misaligned(inputs[shifted])
     torch.testing.assert_close(op(*inputs), expected, rtol=0, atol=0)
-
-
-class BMMW8A16Test(BMMW8A16Workload, TestBase):
-    pass
-
-
-class BMMW8A16BatchStridedTest(BMMW8A16BatchStridedWorkload, TestBase):
-    pass
-
-
-class BMMW8A16BasisTest(BMMW8A16BasisWorkload, TestBase):
-    pass
 
 
 class BMMW8A16Fixture(FixtureBase):
@@ -601,8 +577,8 @@ class BMMW8A16Fixture(FixtureBase):
 
 @BMMW8A16Fixture
 def test_bmm_w8a16(batch: int, m: int, n: int, k: int) -> None:
-    test = BMMW8A16Test(batch, m, n, k)
-    test.check(BMMW8A16FwdOp(), *test.gen_inputs())
+    workload = BMMW8A16Workload(batch, m, n, k)
+    check(workload, BMMW8A16FwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -619,8 +595,8 @@ def test_bmm_w8a16_dequantizes_each_weight_exactly(batch: int, m: int, n: int, k
     """Basis-vector rows select single weights, so each output is one weight as the reference
     dequantizes it, the code times its block's scale rounded to bfloat16, bit for bit: every
     e4m3 code, every 16-byte chunk of a K step, scales that are not powers of two."""
-    test = BMMW8A16BasisTest(batch, m, n, k)
-    test.check(BMMW8A16FwdOp(), *test.gen_inputs())
+    workload = BMMW8A16BasisWorkload(batch, m, n, k)
+    check(workload, BMMW8A16FwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -634,10 +610,10 @@ def test_bmm_w8a16_reads_and_writes_batch_strided_views(batch: int, m: int, n: i
     """DeepSeek-V4-Flash's grouped output projection: ``activation`` and ``out`` are the
     batch-major views of ``[M, B, K]`` and ``[M, B, N]`` tensors, read and written where they
     lie, the product equal bit for bit to the contiguous call's."""
-    test = BMMW8A16BatchStridedTest(batch, m, n, k)
+    workload = BMMW8A16BatchStridedWorkload(batch, m, n, k)
     op = BMMW8A16FwdOp()
-    test.check(op, *test.gen_inputs())
-    a, weight, scale = test.gen_inputs()
+    check(workload, op, *workload.gen_inputs())
+    a, weight, scale = workload.gen_inputs()
     rows = torch.full((m, batch, n), float("nan"), dtype=a.dtype, device=a.device)
     out = rows.transpose(0, 1)
     assert op(a, weight, scale, out=out) is out
@@ -652,8 +628,8 @@ def test_bmm_w8a16_takes_operands_of_any_strides() -> None:
     element; ``out`` transposed in its last two axes. Each gives the contiguous call's product,
     and every padding element stays untouched."""
     batch, m, n, k = 8, 1, 1024, 4096
-    test = BMMW8A16Test(batch, m, n, k)
-    a, weight, scale = test.gen_inputs()
+    workload = BMMW8A16Workload(batch, m, n, k)
+    a, weight, scale = workload.gen_inputs()
     op = BMMW8A16FwdOp()
     expected = op(a, weight, scale)
     a_rows = torch.zeros(batch, m, k + 4, dtype=a.dtype, device=a.device)
@@ -716,13 +692,13 @@ def test_bmm_w8a16_graph_replay_into_batch_strided_views(
 ) -> None:
     """A replay reading ``activation`` and writing ``out`` as batch-strided views, as
     DeepSeek-V4-Flash's decode step calls ``wo_a``, on fresh activations, weights and scales."""
-    test = BMMW8A16BatchStridedTest(batch, m, n, k)
+    workload = BMMW8A16BatchStridedWorkload(batch, m, n, k)
     op = BMMW8A16FwdOp()
-    a, weight, scale = test.gen_inputs()
+    a, weight, scale = workload.gen_inputs()
     out = torch.empty(m, batch, n, dtype=a.dtype, device=a.device).transpose(0, 1)
     graph = CapturedGraph((lambda *inputs: op(*inputs, out=out), (a, weight, scale)))
     assert graph.outputs[0] is out
-    fresh = test.gen_inputs()
+    fresh = workload.gen_inputs()
     graph.renew(fresh)
     graph.replay()
-    compare_outputs(out, test.ref_program(*fresh), test.verification(*fresh))
+    compare_outputs(out, workload.ref_program(*fresh), workload.verification(*fresh))

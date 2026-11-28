@@ -6,7 +6,6 @@ import math
 import pytest
 import torch
 
-from tests.workload_test_base import TestBase
 from tileops._kernels.attention import (
     GQABwdMMAKernel,
     GQABwdPreprocessKernel,
@@ -18,10 +17,6 @@ from workloads.attention.gqa.bwd import GQABwdWorkload
 from workloads.numerics import compare_outputs
 
 pytestmark = [pytest.mark.in_tree_kernels, pytest.mark.smoke]
-
-
-class _GQABwdTest(GQABwdWorkload, TestBase):
-    pass
 
 
 @pytest.mark.parametrize(
@@ -37,8 +32,8 @@ def test_gqa_bwd_kernels_read_delta_scaled_by_the_softmax_scale(
 ) -> None:
     torch.manual_seed(0)
     batch, heads, seq_len, dtype = 1, 4, 256, torch.bfloat16
-    test = _GQABwdTest(batch, heads, heads_kv, seq_len, dim, True, dtype)
-    inputs = tuple(t.detach() for t in test.gen_inputs())
+    workload = GQABwdWorkload(batch, heads, heads_kv, seq_len, dim, True, dtype)
+    inputs = tuple(t.detach() for t in workload.gen_inputs())
     do, q, k, v, o, lse = inputs
     delta, lse_log2, dq_accum = GQABwdPreprocessKernel(batch, heads, seq_len, dim, dtype)(
         o, do, lse, with_dq_accum=not kernel_type.owns_dq_accum
@@ -49,6 +44,6 @@ def test_gqa_bwd_kernels_read_delta_scaled_by_the_softmax_scale(
     kernel = kernel_type(batch, heads, heads_kv, seq_len, dim, True, dtype)
     compare_outputs(
         kernel(q, k, v, do, lse_log2, delta, dq_accum),
-        test.ref_program(*inputs),
-        test.verification(*inputs),
+        workload.ref_program(*inputs),
+        workload.verification(*inputs),
     )

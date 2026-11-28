@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 import torch
 
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops._kernels.kernel_base import Kernel
 from tileops._ops.elementwise import ReLUFwdOp, SoftplusFwdOp
 from tileops._ops.op_base import Op
@@ -20,24 +20,9 @@ from tileops.backend import BUILTIN
 from tileops.gemm import BMMFP8FwdOp, BMMFwdOp, GEMMFwdOp
 from workloads.elementwise import UnaryActivationCase
 from workloads.gemm import BMMFP8Workload, BMMWorkload, GEMMWorkload
+from workloads.workload_base import WorkloadBase
 
 pytestmark = pytest.mark.smoke
-
-
-class _ActivationTest(UnaryActivationCase, TestBase):
-    pass
-
-
-class _BMMTest(BMMWorkload, TestBase):
-    pass
-
-
-class _BMMFP8Test(BMMFP8Workload, TestBase):
-    pass
-
-
-class _GEMMTest(GEMMWorkload, TestBase):
-    pass
 
 
 class _LaunchRecord:
@@ -96,12 +81,12 @@ def _retune_built_kernels(op: Op, monkeypatch: pytest.MonkeyPatch) -> list[_Laun
     return records
 
 
-def _check_tuned_launch(test: TestBase, op: Op, monkeypatch: pytest.MonkeyPatch) -> None:
+def _check_tuned_launch(workload: WorkloadBase, op: Op, monkeypatch: pytest.MonkeyPatch) -> None:
     """Call *op*, tune what it built, call it again, and check what that call launched."""
-    inputs = test.gen_inputs()
+    inputs = workload.gen_inputs()
     op(*inputs)
     records = _retune_built_kernels(op, monkeypatch)
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
     for record in records:
         kernel = record.kernel
         name = type(kernel).__name__
@@ -119,8 +104,8 @@ def _check_tuned_launch(test: TestBase, op: Op, monkeypatch: pytest.MonkeyPatch)
 def test_elementwise_launches_the_tuned_program(op_cls, monkeypatch) -> None:
     """``ReLUFwdOp`` runs a unary strategy kernel and ``SoftplusFwdOp`` a multi-input one;
     both compile their program at construction."""
-    test = _ActivationTest(4096, torch.float16, op_cls.__name__)
-    _check_tuned_launch(test, op_cls(target=BUILTIN), monkeypatch)
+    workload = UnaryActivationCase(4096, torch.float16, op_cls.__name__)
+    _check_tuned_launch(workload, op_cls(target=BUILTIN), monkeypatch)
 
 
 @pytest.mark.in_tree_kernels
@@ -128,16 +113,16 @@ def test_elementwise_launches_the_tuned_program(op_cls, monkeypatch) -> None:
 def test_gemm_launches_the_tuned_program(monkeypatch) -> None:
     """K = 2 is TMA-misaligned, so the pipelined kernel serves it on every architecture;
     it compiles its program on the first launch."""
-    test = _GEMMTest(32, 64, 2, torch.bfloat16, False, True)
-    _check_tuned_launch(test, GEMMFwdOp(trans_b=True, target=BUILTIN), monkeypatch)
+    workload = GEMMWorkload(32, 64, 2, torch.bfloat16, False, True)
+    _check_tuned_launch(workload, GEMMFwdOp(trans_b=True, target=BUILTIN), monkeypatch)
 
 
 @pytest.mark.in_tree_kernels
 @pytest.mark.cuda_only("cuda-kernel")
 def test_bmm_launches_the_tuned_program(monkeypatch) -> None:
     """The batched kernel compiles its program on the first launch."""
-    test = _BMMTest(4, 128, 128, 128, torch.float16)
-    _check_tuned_launch(test, BMMFwdOp(target=BUILTIN), monkeypatch)
+    workload = BMMWorkload(4, 128, 128, 128, torch.float16)
+    _check_tuned_launch(workload, BMMFwdOp(target=BUILTIN), monkeypatch)
 
 
 @pytest.mark.in_tree_kernels
@@ -153,7 +138,7 @@ def test_bmm_launches_the_tuned_program(monkeypatch) -> None:
 def test_bmm_fp8_launches_the_tuned_programs(arch, monkeypatch) -> None:
     """A ``[B, K, N]`` ``b`` also builds the transpose kernel; both compile their program
     on the first launch."""
-    test = _BMMFP8Test(4, 128, 128, 128, torch.float8_e4m3fn, out_dtype=torch.bfloat16)
+    workload = BMMFP8Workload(4, 128, 128, 128, torch.float8_e4m3fn, out_dtype=torch.bfloat16)
     _check_tuned_launch(
-        test, BMMFP8FwdOp(out_dtype=torch.bfloat16, trans_b=False, target=BUILTIN), monkeypatch
+        workload, BMMFP8FwdOp(out_dtype=torch.bfloat16, trans_b=False, target=BUILTIN), monkeypatch
     )

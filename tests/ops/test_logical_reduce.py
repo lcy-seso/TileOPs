@@ -5,7 +5,7 @@ import itertools
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._ops.reduction import (
     AllFwdOp,
     AnyFwdOp,
@@ -41,10 +41,6 @@ class LogicalReduceBasicFixture(FixtureBase):
     ]
 
 
-class LogicalReduceTest(LogicalReduceCase, TestBase):
-    pass
-
-
 _OPS = {"any": AnyFwdOp, "all": AllFwdOp, "count_nonzero": CountNonzeroFwdOp}
 
 
@@ -73,8 +69,8 @@ def _check(op_kind: str, x: torch.Tensor, dim, keepdim: bool = False) -> None:
 @pytest.mark.parametrize("op_kind", list(_OPS))
 @LogicalReduceBasicFixture
 def test_logical_reduce_rows(op_kind: str, m: int, n: int, dtype: torch.dtype) -> None:
-    test = LogicalReduceTest(m, n, dtype, op_kind)
-    test.check(_OPS[op_kind](dim=-1), *test.gen_inputs())
+    workload = LogicalReduceCase(m, n, dtype, op_kind)
+    check(workload, _OPS[op_kind](dim=-1), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -118,17 +114,17 @@ def _edge_input(op_kind: str, dtype: torch.dtype, rows: int) -> torch.Tensor:
 )
 def test_logical_reduce_long_sequence(op_kind: str, dtype: torch.dtype) -> None:
     """A long row whose last step only part of the block reaches."""
-    test = LogicalReduceTest(3, 33024, dtype, op_kind)
-    test.check(_OPS[op_kind](dim=-1), *test.gen_inputs())
+    workload = LogicalReduceCase(3, 33024, dtype, op_kind)
+    check(workload, _OPS[op_kind](dim=-1), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_logical_reduce_autotune() -> None:
     """``request_tune()`` must build and time every candidate width."""
-    test = LogicalReduceTest(4, 40000, torch.bool, "any")
+    workload = LogicalReduceCase(4, 40000, torch.bool, "any")
     op = AnyFwdOp(dim=-1)
     op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke

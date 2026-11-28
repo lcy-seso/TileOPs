@@ -5,7 +5,7 @@ import torch
 
 from tests.compile_contract import assert_op_owns_graph_nodes, register_compile_contract
 from tests.cuda_graph_contract import CapturedGraph
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops._kernels.attention import (
     PagedKVCacheGatherKernel,
     PagedKVCacheGatherRowsKernel,
@@ -137,7 +137,7 @@ def test_paged_kv_cache_gather(lengths, shape, page, dtype, out_dtype, starts, t
     op = PagedKVCacheGatherFwdOp(out_dtype=out_dtype)
     if tune:
         op.request_tune()
-    TestBase.check(workload, op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.in_tree_kernels
@@ -154,7 +154,7 @@ def test_short_gather_packed_requests(lengths, dtype):
     workload = PagedKVCacheGatherWorkload(lengths, (576,), 64, dtype, num_pages=8, table_width=4)
     inputs = workload.gen_inputs()
     op = PagedKVCacheGatherFwdOp(target=BUILTIN)
-    TestBase.check(workload, op, *inputs)
+    check(workload, op, *inputs)
     assert [type(k) for k in op.iter_kernels()] == [PagedKVCacheGatherShortKernel]
 
 
@@ -179,7 +179,7 @@ def test_gather_kernel_by_row_bytes(shape, kernel):
     workload = PagedKVCacheGatherWorkload([17, 16], shape, 16, torch.float16)
     inputs = workload.gen_inputs()
     op = PagedKVCacheGatherFwdOp(target=BUILTIN)
-    TestBase.check(workload, op, *inputs)
+    check(workload, op, *inputs)
     (served,) = op.iter_kernels()
     assert type(served) is kernel
 
@@ -195,7 +195,7 @@ def test_paged_kv_cache_gather_strided_destination():
     inputs[2] = inputs[2].repeat_interleave(2)[::2]
     inputs[3] = inputs[3].repeat_interleave(2)[::2]
     op = PagedKVCacheGatherFwdOp()
-    TestBase.check(workload, op, *inputs)
+    check(workload, op, *inputs)
     assert bool((storage[..., 1::2] == -19).all())
 
 
@@ -217,7 +217,7 @@ def test_paged_kv_cache_gather_graph_metadata():
     inputs[4].fill_(0.75)
     inputs[5].fill_(float("nan"))
     graph.replay(held=[inputs[5]])
-    TestBase.check(workload, op, *inputs, runs=lambda *args, **kwargs: inputs[5])
+    check(workload, op, *inputs, runs=lambda *args, **kwargs: inputs[5])
 
 
 register_compile_contract(PagedKVCacheGatherFwdOp)
@@ -247,7 +247,7 @@ def test_paged_kv_cache_gather_compiles_cold(starts):
     inputs = workload.gen_inputs()
     op = PagedKVCacheGatherFwdOp()
     compiled = torch.compile(op, fullgraph=True)
-    TestBase.check(workload, op, *inputs, runs=compiled)
+    check(workload, op, *inputs, runs=compiled)
 
 
 @pytest.mark.smoke

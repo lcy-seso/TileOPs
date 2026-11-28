@@ -394,7 +394,7 @@ def test_check_refuses_a_kernel_in_place_of_the_op_path():
     """A result is reported under an Op and runs what a caller reaches, before any reference."""
     import types
 
-    from tests.workload_test_base import TestBase
+    from tests.workload_test_base import check
     from tileops._kernels.elementwise import ReLUFwdKernel
     from tileops._ops.elementwise import ReLUFwdOp
 
@@ -405,7 +405,7 @@ def test_check_refuses_a_kernel_in_place_of_the_op_path():
     kernel = ReLUFwdKernel.__new__(ReLUFwdKernel)
     for op, runs in ((kernel, None), (ReLUFwdOp(), kernel), (ReLUFwdOp(), kernel.forward)):
         with pytest.raises(AssertionError, match="runs="):
-            TestBase.check(workload, op, torch.ones(1), runs=runs)
+            check(workload, op, torch.ones(1), runs=runs)
 
 
 @pytest.mark.parametrize(

@@ -1,14 +1,10 @@
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops.attention import MLADenseDecodeFwdOp
 from tileops.backend import BUILTIN
 from workloads.attention.mla import MLADecodeWorkload
-
-
-class MLADecodeTest(MLADecodeWorkload, TestBase):
-    pass
 
 
 class MLADecodeFixture(FixtureBase):
@@ -73,11 +69,11 @@ def test_mla_decode(
     dtype: torch.dtype,
     tune: bool,
 ):
-    test = MLADecodeTest(batch, heads, heads_kv, seq_len_kv, dim, dim_pe, dtype)
+    workload = MLADecodeWorkload(batch, heads, heads_kv, seq_len_kv, dim, dim_pe, dtype)
     op = MLADenseDecodeFwdOp()
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -93,9 +89,9 @@ def test_mla_decode(
 )
 def test_mla_decode_masks_keys_past_the_cache_end(seq_len_kv: int) -> None:
     """A cache the tiles do not fill must not reach past its last key."""
-    test = MLADecodeTest(2, 128, 1, seq_len_kv, 512, 64, torch.float16)
+    workload = MLADecodeWorkload(2, 128, 1, seq_len_kv, 512, 64, torch.float16)
     op = MLADenseDecodeFwdOp()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -116,9 +112,9 @@ def test_mla_decode_masks_keys_past_the_cache_end(seq_len_kv: int) -> None:
 def test_mla_decode_takes_the_seesaw_on_sm90(batch, heads, seq_len_kv, dtype, splits) -> None:
     """A 512 + 64 latent takes the seesaw, which cuts runs only while blocks are short of
     the SMs."""
-    test = MLADecodeTest(batch, heads, 1, seq_len_kv, 512, 64, dtype)
+    workload = MLADecodeWorkload(batch, heads, 1, seq_len_kv, 512, 64, dtype)
     op = MLADenseDecodeFwdOp(target=BUILTIN)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     (kernel,) = op._entries_built("mla_decode_kernel").values()
     assert type(kernel).__name__ == "MLADecodeSeesawKernel"
     assert kernel.num_splits(batch, seq_len_kv) == splits

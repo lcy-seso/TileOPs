@@ -6,7 +6,7 @@ import pytest
 import torch
 from fla.ops.gla import chunk_gla, fused_recurrent_gla
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._kernels.linear_attention.gla.call_spec import GLACall
 from tileops._kernels.linear_attention.gla.dense_decode import GLADenseDecodeFwdKernel
 from tileops._kernels.linear_attention.gla.dense_prefill_partitioned import (
@@ -409,15 +409,15 @@ def test_gla_bwd_refuses_what_99_kb_cannot_hold(
         assert not op._entries_built(interface)
 
 
-def _skip_unless_kernel_serves(kernel_cls: type, test: GLAFwdWorkload) -> None:
-    """Skip when *kernel_cls* declares that it does not serve *test*'s call on the run device."""
+def _skip_unless_kernel_serves(kernel_cls: type, workload: GLAFwdWorkload) -> None:
+    """Skip when *kernel_cls* declares that it does not serve *workload*'s call on the run device."""
     call = GLACall(
-        batch=test.batch,
-        seq_len=test.seq_len,
-        heads=test.heads,
-        dim_k=test.dim_k,
-        dim_v=test.dim_v,
-        dtype=test.dtype,
+        batch=workload.batch,
+        seq_len=workload.seq_len,
+        heads=workload.heads,
+        dim_k=workload.dim_k,
+        dim_v=workload.dim_v,
+        dtype=workload.dtype,
         device=torch.device(run_device()),
     )
     reason = kernel_cls.unavailable(call) or kernel_cls.refusal(call)
@@ -426,8 +426,6 @@ def _skip_unless_kernel_serves(kernel_cls: type, test: GLAFwdWorkload) -> None:
 
 
 # The public GLA inference contract and its in-tree dense-prefill path.
-class GLAFwdTest(GLAFwdWorkload, TestBase):
-    pass
 
 
 def _stub_gla_builder(calls: list | None = None):
@@ -521,14 +519,14 @@ def test_gla_fwd_roofline_counts_packed_states(seeded: bool) -> None:
 )
 def test_gla_dense_prefill_matches_fla(dtype: torch.dtype, seq_len: int, dim: int) -> None:
     torch.manual_seed(2160)
-    test = GLAFwdTest(2, seq_len, 4, dim, dim, dtype, has_initial_state=True)
-    _skip_unless_kernel_serves(GLADensePrefillSubchunkKernel, test)
-    inputs = test.gen_inputs()
+    workload = GLAFwdWorkload(2, seq_len, 4, dim, dim, dtype, has_initial_state=True)
+    _skip_unless_kernel_serves(GLADensePrefillSubchunkKernel, workload)
+    inputs = workload.gen_inputs()
     op = GLAFwdOp()
-    test.check(op, *inputs)
-    test.check(op, *inputs[:4])
+    check(workload, op, *inputs)
+    check(workload, op, *inputs[:4])
     inputs[3].mul_(3.0)
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.in_tree_kernels
@@ -636,9 +634,9 @@ def test_gla_prefill_stays_finite_when_the_gate_outruns_a_split_exponent(
 def test_gla_prefill_rows_shorter_than_a_whole_chunk_match_fla() -> None:
     """An equal-length call whose rows are not a multiple of 64 runs the packed kernel."""
     torch.manual_seed(2237)
-    test = GLAFwdTest(2, 100, 4, 64, 64, torch.bfloat16, has_initial_state=True)
+    workload = GLAFwdWorkload(2, 100, 4, 64, 64, torch.bfloat16, has_initial_state=True)
     op = GLAFwdOp()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -651,12 +649,12 @@ def test_gla_long_prefill_uses_partitioned_kernel(
     dtype: torch.dtype, has_initial_state: bool, gate_scale: float
 ) -> None:
     torch.manual_seed(2160)
-    test = GLAFwdTest(2, 16384, 4, 64, 64, dtype, has_initial_state)
-    _skip_unless_kernel_serves(GLADensePrefillPartitionedKernel, test)
-    inputs = test.gen_inputs()
+    workload = GLAFwdWorkload(2, 16384, 4, 64, 64, dtype, has_initial_state)
+    _skip_unless_kernel_serves(GLADensePrefillPartitionedKernel, workload)
+    inputs = workload.gen_inputs()
     inputs[3].mul_(gate_scale)
     op = GLAFwdOp()
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
     assert [type(kernel) for kernel in op.iter_kernels()] == [GLADensePrefillPartitionedKernel]
 
 
@@ -673,12 +671,12 @@ def test_gla_dense_decode_matches_fla(
     dtype: torch.dtype, dim: int, has_initial_state: bool, scale: float | None
 ) -> None:
     torch.manual_seed(2174)
-    test = GLAFwdTest(2, 1, 4, dim, dim, dtype, has_initial_state, scale)
-    _skip_unless_kernel_serves(GLADenseDecodeFwdKernel, test)
-    inputs = test.gen_inputs()
+    workload = GLAFwdWorkload(2, 1, 4, dim, dim, dtype, has_initial_state, scale)
+    _skip_unless_kernel_serves(GLADenseDecodeFwdKernel, workload)
+    inputs = workload.gen_inputs()
     op = GLAFwdOp(scale)
     # The workload checks FP32 state at 3e-7 and permits one output rounding unit.
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.smoke
@@ -687,20 +685,20 @@ def test_gla_dense_decode_steps_match_one_recurrence() -> None:
     """Feeding each step's final_state back matches one recurrence over all the steps."""
     torch.manual_seed(2174)
     steps = 8
-    test = GLAFwdTest(2, steps, 4, 64, 64, torch.bfloat16, has_initial_state=True)
-    _skip_unless_kernel_serves(GLADenseDecodeFwdKernel, GLAFwdTest(2, 1, 4, 64, 64, torch.bfloat16))
-    q, k, v, g, state = test.gen_inputs()
-    ref_o, ref_state = test.ref_program(q, k, v, g, state)
+    workload = GLAFwdWorkload(2, steps, 4, 64, 64, torch.bfloat16, has_initial_state=True)
+    _skip_unless_kernel_serves(
+        GLADenseDecodeFwdKernel, GLAFwdWorkload(2, 1, 4, 64, 64, torch.bfloat16)
+    )
+    q, k, v, g, state = workload.gen_inputs()
+    ref_o, ref_state = workload.ref_program(q, k, v, g, state)
     op = GLAFwdOp()
     outputs = []
     for t in range(steps):
         o, state = op(*(x[:, t : t + 1] for x in (q, k, v, g)), state)
         outputs.append(o)
-    compare_outputs((torch.cat(outputs, dim=1), state), (ref_o, ref_state), test.verification(q))
-
-
-class GLADecodeTest(GLADecodeWorkload, TestBase):
-    pass
+    compare_outputs(
+        (torch.cat(outputs, dim=1), state), (ref_o, ref_state), workload.verification(q)
+    )
 
 
 class GLADecodeFixture(FixtureBase):
@@ -744,11 +742,11 @@ def test_gla_decode(
     batch: int, heads: int, dim_k: int, dim_v: int, dtype: torch.dtype, tune: bool
 ) -> None:
     torch.manual_seed(42)
-    test = GLADecodeTest(batch, heads, dim_k, dim_v, dtype)
+    workload = GLADecodeWorkload(batch, heads, dim_k, dim_v, dtype)
     op = GLARecurrentFwdOp()
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -756,7 +754,7 @@ def test_gla_decode(
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
 def test_gla_decode_accepts_strided_inputs(dtype: torch.dtype) -> None:
     torch.manual_seed(42)
-    inputs = GLADecodeTest(2, 2, 64, 64, dtype).gen_inputs()
+    inputs = GLADecodeWorkload(2, 2, 64, 64, dtype).gen_inputs()
     views = tuple(_transpose_view(tensor) for tensor in inputs)
     op = GLARecurrentFwdOp(target=BUILTIN)
     torch.testing.assert_close(op(*views), op(*inputs), atol=0, rtol=0)
@@ -767,8 +765,8 @@ def test_gla_decode_value_slice(
     batch: int, heads: int, dim_k: int, dim_v: int, dtype: torch.dtype
 ) -> None:
     torch.manual_seed(42)
-    test = GLADecodeTest(batch, heads, dim_k, dim_v, dtype)
-    test.check(GLARecurrentFwdOp(), *test.gen_inputs())
+    workload = GLADecodeWorkload(batch, heads, dim_k, dim_v, dtype)
+    check(workload, GLARecurrentFwdOp(), *workload.gen_inputs())
 
 
 @GLADecodeFixture

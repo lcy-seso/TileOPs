@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from tests.cuda_graph_contract import check_replay
-from tests.workload_test_base import TestBase, check_strided_in_place
+from tests.workload_test_base import check, check_strided_in_place
 from tileops.quantization import FP4QuantPerGroupFwdOp
 from workloads.device import run_device
 from workloads.quantization.quantize import (
@@ -10,18 +10,6 @@ from workloads.quantization.quantize import (
     FP4QuantViewWorkload,
     FP4QuantWorkload,
 )
-
-
-class FP4QuantTest(FP4QuantWorkload, TestBase):
-    pass
-
-
-class FP4QuantTiesTest(FP4QuantTiesWorkload, TestBase):
-    pass
-
-
-class FP4QuantViewTest(FP4QuantViewWorkload, TestBase):
-    pass
 
 
 @pytest.mark.parametrize(
@@ -48,16 +36,16 @@ class FP4QuantViewTest(FP4QuantViewWorkload, TestBase):
     ],
 )
 def test_fp4_quant_op(shape, block_size, inplace) -> None:
-    test = FP4QuantTest(shape, block_size, inplace)
-    test.check(FP4QuantPerGroupFwdOp(block_size, inplace), *test.gen_inputs())
+    workload = FP4QuantWorkload(shape, block_size, inplace)
+    check(workload, FP4QuantPerGroupFwdOp(block_size, inplace), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_fp4_quant_runs_after_a_tuning_request() -> None:
-    test = FP4QuantTest((64, 128), 32, False)
+    workload = FP4QuantWorkload((64, 128), 32, False)
     op = FP4QuantPerGroupFwdOp()
     op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -67,8 +55,8 @@ def test_fp4_quant_runs_after_a_tuning_request() -> None:
 def test_fp4_quant_rounds_ties_to_even_and_keeps_signed_zeros(inplace) -> None:
     """Values on the midpoint of two e2m1 values round to the even code, a negative value
     rounding to zero keeps its sign, and an all-zero block takes the floor."""
-    test = FP4QuantTiesTest((256, 128), 32, inplace)
-    test.check(FP4QuantPerGroupFwdOp(32, inplace), *test.gen_inputs())
+    workload = FP4QuantTiesWorkload((256, 128), 32, inplace)
+    check(workload, FP4QuantPerGroupFwdOp(32, inplace), *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -88,8 +76,8 @@ def test_fp4_quant_rounds_ties_to_even_and_keeps_signed_zeros(inplace) -> None:
 )
 def test_fp4_quant_fake_quantizes_a_strided_view_in_place(wide_shape, index) -> None:
     x_shape = torch.empty(wide_shape, device="meta")[index].shape
-    test = FP4QuantViewTest(wide_shape, index, x_shape, 32, True)
-    check_strided_in_place(test, FP4QuantPerGroupFwdOp(32, inplace=True))
+    workload = FP4QuantViewWorkload(wide_shape, index, x_shape, 32, True)
+    check_strided_in_place(workload, FP4QuantPerGroupFwdOp(32, inplace=True))
 
 
 @pytest.mark.sm90
@@ -105,7 +93,7 @@ def test_fp4_quant_fake_quantizes_a_strided_view_in_place(wide_shape, index) -> 
 )
 def test_fp4_quant_graph_replay(shape) -> None:
     """DeepSeek-V4-Flash's decode-step fake quantization in place of an indexer row."""
-    check_replay(FP4QuantTest(shape, inplace=True), FP4QuantPerGroupFwdOp(inplace=True))
+    check_replay(FP4QuantWorkload(shape, inplace=True), FP4QuantPerGroupFwdOp(inplace=True))
 
 
 @pytest.mark.smoke
@@ -120,8 +108,8 @@ def test_fp4_quant_rejects_an_input_other_than_bfloat16() -> None:
 def test_fp4_quant_serves_new_token_counts_from_one_kernel() -> None:
     op = FP4QuantPerGroupFwdOp(32, inplace=True)
     for tokens in (3, 70):
-        test = FP4QuantTest((tokens, 128), 32, True)
-        test.check(op, *test.gen_inputs())
+        workload = FP4QuantWorkload((tokens, 128), 32, True)
+        check(workload, op, *workload.gen_inputs())
     assert len(list(op.iter_kernels())) == 1
 
 

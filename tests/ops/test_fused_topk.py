@@ -7,7 +7,7 @@ import pytest
 import torch
 
 from tests.cuda_graph_contract import CapturedGraph
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._ops.moe import FusedTopKFwdOp
 from tileops.backend import OpNotAvailableError
 from workloads.device import run_device
@@ -173,9 +173,9 @@ class FusedTopKFixture(FixtureBase):
     ]
 
 
-def _check(test: FusedTopKWorkload) -> None:
-    op = FusedTopKFwdOp(**test.call.arguments())
-    TestBase.check(test, op, *test.gen_inputs())
+def _check(workload: FusedTopKWorkload) -> None:
+    op = FusedTopKFwdOp(**workload.call.arguments())
+    check(workload, op, *workload.gen_inputs())
 
 
 @FusedTopKFixture
@@ -589,8 +589,8 @@ def test_fused_topk_graph_replay() -> None:
     graph.renew(selected.gen_inputs(), given.gen_inputs())
     hashed[2].add_(1).remainder_(hashed[0].shape[-1])
     graph.replay()
-    TestBase.check(selected, op, *biased, runs=lambda *args, **kwargs: graph.outputs[0])
-    TestBase.check(given, op, *hashed, runs=lambda *args, **kwargs: graph.outputs[1])
+    check(selected, op, *biased, runs=lambda *args, **kwargs: graph.outputs[0])
+    check(given, op, *hashed, runs=lambda *args, **kwargs: graph.outputs[1])
 
 
 @pytest.mark.smoke
@@ -611,7 +611,7 @@ def test_sqrtsoftplus_keeps_float32_precision_at_extreme_logits() -> None:
     workload = FusedTopKWorkload(call)
     _, _, expert_ids = workload.gen_inputs()
     gating = torch.linspace(-92, 200, 64 * 64, device=run_device()).view(64, 64)
-    TestBase.check(workload, FusedTopKFwdOp(64, "sqrtsoftplus"), gating, None, expert_ids)
+    check(workload, FusedTopKFwdOp(64, "sqrtsoftplus"), gating, None, expert_ids)
 
 
 @pytest.mark.smoke
@@ -707,7 +707,7 @@ def test_spelling_out_the_ungrouped_defaults_changes_nothing() -> None:
     spelled = FusedTopKFwdOp(
         8, "sigmoid", True, num_expert_group=1, topk_group=1, routed_scaling_factor=1.0
     )
-    TestBase.check(workload, default, gating, bias)
+    check(workload, default, gating, bias)
     for got, want in zip(spelled(gating, bias), default(gating, bias), strict=True):
         assert torch.equal(got, want)
 
@@ -848,7 +848,7 @@ def test_sigmoid_bias_cancellation_keeps_the_absolute_routing_tolerance() -> Non
         renormalize=False,
         some=["correction_bias"],
     )
-    TestBase.check(FusedTopKWorkload(call), FusedTopKFwdOp(1, "sigmoid"), gating, bias)
+    check(FusedTopKWorkload(call), FusedTopKFwdOp(1, "sigmoid"), gating, bias)
 
 
 @pytest.mark.in_tree_kernels

@@ -5,7 +5,7 @@ import torch
 
 from tests.compile_contract import assert_op_owns_graph_nodes, register_compile_contract
 from tests.cuda_graph_contract import check_replay
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops.attention import MergeAttentionStatesFwdOp
 from workloads.attention.merge_states import MergeAttentionStatesWorkload
 
@@ -38,28 +38,28 @@ def test_merge_attention_states(tokens, heads, dim, dtype, strided):
     w = MergeAttentionStatesWorkload(tokens, heads, dim, dtype, edge_states=True, strided=strided)
     inputs = w.gen_inputs()
     op = MergeAttentionStatesFwdOp()
-    TestBase.check(w, op, *inputs)
+    check(w, op, *inputs)
 
 
 @pytest.mark.smoke
 def test_merge_attention_states_log2():
     """Log2 LSE in and out, empty states included."""
     w = MergeAttentionStatesWorkload(17, 4, 128, torch.bfloat16, lse_base="2", edge_states=True)
-    TestBase.check(w, MergeAttentionStatesFwdOp("2"), *w.gen_inputs())
+    check(w, MergeAttentionStatesFwdOp("2"), *w.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_merge_attention_states_misaligned_storage():
     """Contiguous views with an unaligned storage offset remain valid inputs."""
     w = MergeAttentionStatesWorkload(4, 2, 128, torch.float16, misaligned=True)
-    TestBase.check(w, MergeAttentionStatesFwdOp(), *w.gen_inputs())
+    check(w, MergeAttentionStatesFwdOp(), *w.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_merge_attention_states_finite_underflow_keeps_nan():
     """An underflowed weight does not make a finite-LSE state's NaN value empty."""
     w = MergeAttentionStatesWorkload(4, 2, 128, torch.float16, finite_underflow=True)
-    TestBase.check(w, MergeAttentionStatesFwdOp(), *w.gen_inputs())
+    check(w, MergeAttentionStatesFwdOp(), *w.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -93,7 +93,7 @@ def test_merge_attention_states_compile_and_reuse():
     op = MergeAttentionStatesFwdOp()
     assert_op_owns_graph_nodes(op, *inputs)
     compiled = torch.compile(op, fullgraph=True)
-    TestBase.check(w, op, *inputs, runs=compiled)
+    check(w, op, *inputs, runs=compiled)
     for tokens, heads in ((19, 3), (0, 2)):
         changed = MergeAttentionStatesWorkload(tokens, heads, 128, torch.float16)
-        TestBase.check(changed, op, *changed.gen_inputs(), runs=compiled)
+        check(changed, op, *changed.gen_inputs(), runs=compiled)

@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from tests.misaligned import misaligned
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops.quantization import (
     FP8QuantPerBlockFwdOp,
     INT4QuantPerGroupFwdOp,
@@ -94,8 +94,8 @@ def _fp8_cases(rows, cols, dtype):
     ],
 )
 def test_quantize_matches_reference(op_cls, rows, cols, dtype) -> None:
-    test = type("QuantizeTest", (_WORKLOADS[op_cls], TestBase), {})(rows, cols, dtype)
-    test.check(op_cls(), *test.gen_inputs())
+    workload = _WORKLOADS[op_cls](rows, cols, dtype)
+    check(workload, op_cls(), *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -147,9 +147,9 @@ def test_quantize_matches_reference(op_cls, rows, cols, dtype) -> None:
     ],
 )
 def test_int8_quant_per_channel_edge_inputs(rows, cols, dtype, make) -> None:
-    test = type("QuantizeTest", (INT8QuantPerChannelWorkload, TestBase), {})(rows, cols, dtype)
-    (w,) = test.gen_inputs()
-    test.check(INT8QuantPerChannelFwdOp(), make(w))
+    workload = INT8QuantPerChannelWorkload(rows, cols, dtype)
+    (w,) = workload.gen_inputs()
+    check(workload, INT8QuantPerChannelFwdOp(), make(w))
 
 
 @pytest.mark.parametrize(
@@ -166,9 +166,9 @@ def test_int8_quant_per_channel_edge_inputs(rows, cols, dtype, make) -> None:
     ],
 )
 def test_int8_quant_per_tensor_edge_inputs(dtype, make) -> None:
-    test = type("QuantizeTest", (INT8QuantPerTensorWorkload, TestBase), {})(64, 1024, dtype)
-    (x,) = test.gen_inputs()
-    test.check(INT8QuantPerTensorFwdOp(), make(x))
+    workload = INT8QuantPerTensorWorkload(64, 1024, dtype)
+    (x,) = workload.gen_inputs()
+    check(workload, INT8QuantPerTensorFwdOp(), make(x))
 
 
 @pytest.mark.smoke
@@ -236,9 +236,9 @@ def _ties(x: torch.Tensor) -> torch.Tensor:
     ],
 )
 def test_int8_quant_per_block_edge_inputs(rows, cols, dtype, make) -> None:
-    test = type("QuantizeTest", (INT8QuantPerBlockWorkload, TestBase), {})(rows, cols, dtype)
-    (x,) = test.gen_inputs()
-    test.check(INT8QuantPerTokenGroupFwdOp(), make(x))
+    workload = INT8QuantPerBlockWorkload(rows, cols, dtype)
+    (x,) = workload.gen_inputs()
+    check(workload, INT8QuantPerTokenGroupFwdOp(), make(x))
 
 
 @pytest.mark.smoke
@@ -285,8 +285,8 @@ def test_int8_round_trip(per_block: bool, dtype: torch.dtype) -> None:
     ],
 )
 def test_smooth_quant_edge_inputs(rows, cols, dtype, offset, ieee) -> None:
-    test = type("QuantizeTest", (SmoothQuantWorkload, TestBase), {})(rows, cols, dtype)
-    x, smooth = test.gen_inputs()
+    workload = SmoothQuantWorkload(rows, cols, dtype)
+    x, smooth = workload.gen_inputs()
     if ieee:
         # A reciprocal-corrected quotient of this pair is one float32 ulp off, and it is
         # its row's amax, so the scale differs unless the tiny factors send the row to IEEE
@@ -301,7 +301,7 @@ def test_smooth_quant_edge_inputs(rows, cols, dtype, offset, ieee) -> None:
     shifted.copy_(smooth * sign)
     if offset:
         x = misaligned(x)
-    test.check(SmoothQuantFwdOp(), x, shifted)
+    check(workload, SmoothQuantFwdOp(), x, shifted)
 
 
 @pytest.mark.smoke
@@ -342,10 +342,6 @@ def _assert_int4_restores(packed, params, w, tolerance) -> None:
     assert (error <= torch.where(codes == 7, step, step / 2) + tolerance).all()
 
 
-class INT4QuantPerGroupTest(INT4QuantPerGroupWorkload, TestBase):
-    pass
-
-
 def _int4_special_groups(w: torch.Tensor) -> torch.Tensor:
     """Constant groups, one sign, tiny ranges and signed rounding boundaries."""
     w = w.clone()
@@ -381,9 +377,9 @@ def _int4_special_groups(w: torch.Tensor) -> torch.Tensor:
     ],
 )
 def test_int4_quant_per_group_edge_inputs(rows, cols, group_size, make) -> None:
-    test = INT4QuantPerGroupTest(rows, cols, torch.float16, group_size)
-    (w,) = test.gen_inputs()
-    test.check(INT4QuantPerGroupFwdOp(group_size), make(w))
+    workload = INT4QuantPerGroupWorkload(rows, cols, torch.float16, group_size)
+    (w,) = workload.gen_inputs()
+    check(workload, INT4QuantPerGroupFwdOp(group_size), make(w))
 
 
 @pytest.mark.smoke
@@ -392,10 +388,10 @@ def test_int4_quant_per_group_edge_inputs(rows, cols, group_size, make) -> None:
 def test_int4_group64_packed_words_preserve_rounding_and_nibble_order() -> None:
     from tileops.backend import BUILTIN
 
-    test = INT4QuantPerGroupTest(512, 4096, torch.float16, 64)
-    (w,) = test.gen_inputs()
+    workload = INT4QuantPerGroupWorkload(512, 4096, torch.float16, 64)
+    (w,) = workload.gen_inputs()
     op = INT4QuantPerGroupFwdOp(64, target=BUILTIN)
-    test.check(op, _int4_special_groups(w))
+    check(workload, op, _int4_special_groups(w))
     (kernel,) = op.iter_kernels()
     assert kernel.pack_intrinsic
 
@@ -503,27 +499,15 @@ def _tiny(w: torch.Tensor) -> torch.Tensor:
     ],
 )
 def test_fp8_quant_per_block_edge_inputs(rows, cols, dtype, make) -> None:
-    test = type("QuantizeTest", (FP8QuantPerBlockWorkload, TestBase), {})(rows, cols, dtype)
-    (w,) = test.gen_inputs()
-    test.check(FP8QuantPerBlockFwdOp(), make(w))
+    workload = FP8QuantPerBlockWorkload(rows, cols, dtype)
+    (w,) = workload.gen_inputs()
+    check(workload, FP8QuantPerBlockFwdOp(), make(w))
 
 
-class INT8DequantPerTensorTest(INT8DequantPerTensorWorkload, TestBase):
-    pass
-
-
-class INT8DequantPerChannelTest(INT8DequantPerChannelWorkload, TestBase):
-    pass
-
-
-class INT8DequantPerBlockTest(INT8DequantPerBlockWorkload, TestBase):
-    pass
-
-
-_DEQUANT_TESTS = {
-    INT8DequantPerTensorFwdOp: INT8DequantPerTensorTest,
-    INT8DequantPerChannelFwdOp: INT8DequantPerChannelTest,
-    INT8DequantPerBlockFwdOp: INT8DequantPerBlockTest,
+_DEQUANT_WORKLOADS = {
+    INT8DequantPerTensorFwdOp: INT8DequantPerTensorWorkload,
+    INT8DequantPerChannelFwdOp: INT8DequantPerChannelWorkload,
+    INT8DequantPerBlockFwdOp: INT8DequantPerBlockWorkload,
 }
 
 
@@ -589,9 +573,9 @@ class INT8DequantFixture(FixtureBase):
 
 @INT8DequantFixture
 def test_int8_dequant_op(op_cls: type, m: int, k: int, out_dtype: torch.dtype) -> None:
-    test = _DEQUANT_TESTS[op_cls](m, k, out_dtype)
+    workload = _DEQUANT_WORKLOADS[op_cls](m, k, out_dtype)
     # One float32 multiply and one cast: a conforming kernel is bit-exact.
-    test.check(op_cls(out_dtype), *test.gen_inputs())
+    check(workload, op_cls(out_dtype), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -616,7 +600,7 @@ def test_int8_dequant_rejects_wrong_scale_shape(op_cls: type, scale_shape: tuple
 )
 def test_int8_dequant_misaligned_input(op_cls: type) -> None:
     """A ``q`` whose storage is off the vector boundary, rows that split a thread's codes, a tail."""
-    test = _DEQUANT_TESTS[op_cls](5, 1001, torch.bfloat16)
-    q, scale = test.gen_inputs()
+    workload = _DEQUANT_WORKLOADS[op_cls](5, 1001, torch.bfloat16)
+    q, scale = workload.gen_inputs()
     q = misaligned(q)
-    test.check(op_cls(torch.bfloat16), q, scale)
+    check(workload, op_cls(torch.bfloat16), q, scale)

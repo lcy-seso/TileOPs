@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 from tests.compile_contract import assert_op_owns_graph_nodes, register_compile_contract
 from tests.cuda_graph_contract import check_replay
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops.convolution import Conv1dFwdOp, Conv2dFwdOp, Conv3dFwdOp
 from workloads.convolution import (
     Conv1dWorkload,
@@ -239,10 +239,6 @@ class Conv1dFixture(FixtureBase):
     ]
 
 
-class Conv1dTest(Conv1dWorkload, TestBase):
-    pass
-
-
 @Conv1dFixture
 def test_conv1d(
     n: int,
@@ -257,11 +253,13 @@ def test_conv1d(
     dtype: torch.dtype,
     tune: bool,
 ) -> None:
-    test = Conv1dTest(n, c_in, l_in, c_out, kernel_size, stride, padding, dilation, groups, dtype)
+    workload = Conv1dWorkload(
+        n, c_in, l_in, c_out, kernel_size, stride, padding, dilation, groups, dtype
+    )
     op = Conv1dFwdOp(stride=stride, padding=padding, dilation=dilation, groups=groups)
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -437,11 +435,11 @@ def test_conv1d_dispatches_kernel(
 def test_conv1d_unit_stride_under_tuning(tune: bool) -> None:
     """c_in = 130 puts each tap's weight columns off a 16-byte boundary and needs two channel
     blocks; the padding gives boundary CTAs, whichever taps per k tile tuning picks."""
-    test = Conv1dTest(1, 130, 260, 67, 4, 1, 3, 2, 1, torch.float16)
+    workload = Conv1dWorkload(1, 130, 260, 67, 4, 1, 3, 2, 1, torch.float16)
     op = Conv1dFwdOp(padding=3, dilation=2)
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 class Conv2dFixture(FixtureBase):
@@ -696,10 +694,6 @@ class Conv2dFixture(FixtureBase):
     ]
 
 
-class Conv2dTest(Conv2dWorkload, TestBase):
-    pass
-
-
 @Conv2dFixture
 def test_conv2d(
     n: int,
@@ -715,11 +709,13 @@ def test_conv2d(
     dtype: torch.dtype,
     tune: bool,
 ) -> None:
-    test = Conv2dTest(n, c_in, h, w, c_out, kernel_size, stride, padding, dilation, groups, dtype)
+    workload = Conv2dWorkload(
+        n, c_in, h, w, c_out, kernel_size, stride, padding, dilation, groups, dtype
+    )
     op = Conv2dFwdOp(stride=stride, padding=padding, dilation=dilation, groups=groups)
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -864,12 +860,12 @@ def test_conv2d_symmetric_split_contraction(n: int, h: int, dtype: torch.dtype, 
 
     if not _has_gpu_profile():
         pytest.skip("the split is priced from the device's GPU profile, and this device has none")
-    test = Conv2dTest(n, 64, h, h, 128, (3, 3), (1, 1), (1, 1), (1, 1), 1, dtype, bias=bias)
-    x, weight, _ = test.gen_inputs()
+    workload = Conv2dWorkload(n, 64, h, h, 128, (3, 3), (1, 1), (1, 1), (1, 1), 1, dtype, bias=bias)
+    x, weight, _ = workload.gen_inputs()
     # The workload's bias is zero, which would hide a sum that drops it.
     bias_in = torch.randn(128, device=x.device, dtype=dtype) if bias else None
     op = Conv2dFwdOp(padding=1, target=BUILTIN)
-    test.check(op, x, weight, bias_in)
+    check(workload, op, x, weight, bias_in)
     (kernel,) = op.iter_kernels()
     assert type(kernel) is Conv2dSymmetricKernel
     assert kernel.config["split_k"] > 1
@@ -1160,10 +1156,6 @@ class Conv3dFixture(FixtureBase):
     ]
 
 
-class Conv3dTest(Conv3dWorkload, TestBase):
-    pass
-
-
 @Conv3dFixture
 def test_conv3d(
     n: int,
@@ -1180,13 +1172,13 @@ def test_conv3d(
     dtype: torch.dtype,
     tune: bool,
 ) -> None:
-    test = Conv3dTest(
+    workload = Conv3dWorkload(
         n, c_in, d, h, w, c_out, kernel_size, stride, padding, dilation, groups, dtype
     )
     op = Conv3dFwdOp(stride=stride, padding=padding, dilation=dilation, groups=groups)
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -1414,7 +1406,7 @@ def test_a_non_contiguous_input_compiles_to_the_shape_the_fake_promised() -> Non
 @pytest.mark.in_tree_kernels
 def test_conv1d_graph_reads_updated_inference_weights() -> None:
     """Weight packing consumes live data, even without a Tensor version counter."""
-    workload = Conv1dTest(2, 64, 512, 128, 3, 1, 1, 1, 1, torch.float16)
+    workload = Conv1dWorkload(2, 64, 512, 128, 3, 1, 1, 1, 1, torch.float16)
     op = Conv1dFwdOp(padding=1)
     with torch.inference_mode():
         x, weight, bias = workload.gen_inputs()

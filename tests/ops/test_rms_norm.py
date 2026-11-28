@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from tests.compile_contract import assert_op_owns_graph_nodes, register_compile_contract
 from tests.cuda_graph_contract import check_replay
 from tests.misaligned import misaligned
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._kernels.kernel_base import Kernel
 from tileops._kernels.norm import rms_norm_staged
 from tileops._kernels.norm.rms_norm import (
@@ -39,10 +39,6 @@ from workloads.numerics import compare_outputs
 from workloads.workload_base import manifest_call
 
 register_compile_contract(RMSNormFwdOp)
-
-
-class RMSNormTest(RMSNormWorkload, TestBase):
-    pass
 
 
 class RMSNormFixture(FixtureBase):
@@ -79,9 +75,9 @@ class RMSNormFixture(FixtureBase):
 
 @RMSNormFixture
 def test_rms_norm_op(m: int, n: int, dtype: torch.dtype) -> None:
-    test = RMSNormTest(m, n, dtype)
+    workload = RMSNormWorkload(m, n, dtype)
     op = RMSNormFwdOp(normalized_shape=(n,))
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 def _view(view: str, n: int, dtype: torch.dtype) -> torch.Tensor:
@@ -233,10 +229,6 @@ def test_tuned_rms_norm_in_each_row_body(n: int, many_rows: bool) -> None:
     )
 
 
-class RMSNormZeroCenteredOffsetTest(RMSNormZeroCenteredOffsetWorkload, TestBase):
-    pass
-
-
 @pytest.mark.parametrize(
     "m, n",
     [
@@ -250,29 +242,25 @@ class RMSNormZeroCenteredOffsetTest(RMSNormZeroCenteredOffsetWorkload, TestBase)
 def test_rms_norm_zero_centered_in_each_row_body(m: int, n: int) -> None:
     """Each body scales a zero-centered row by one plus the weight, formed in float32: rounded to
     bfloat16 first, it moves outputs these inputs hold exactly."""
-    test = RMSNormZeroCenteredOffsetTest(m, n, torch.bfloat16, zero_centered=True)
+    workload = RMSNormZeroCenteredOffsetWorkload(m, n, torch.bfloat16, zero_centered=True)
     op = RMSNormFwdOp(normalized_shape=(n,), eps=1e-6, zero_centered=True)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_rms_norm_zero_centered_float16() -> None:
-    test = RMSNormTest(1024, 4096, torch.float16, zero_centered=True)
+    workload = RMSNormWorkload(1024, 4096, torch.float16, zero_centered=True)
     op = RMSNormFwdOp(normalized_shape=(4096,), eps=1e-6, zero_centered=True)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_rms_norm_zero_centered_without_weight() -> None:
     """A zero-centered call without a weight scales by one, as by a zero weight's 1 + 0."""
-    test = RMSNormTest(5, 256, torch.bfloat16, zero_centered=True)
-    x, _ = test.gen_inputs()
+    workload = RMSNormWorkload(5, 256, torch.bfloat16, zero_centered=True)
+    x, _ = workload.gen_inputs()
     op = RMSNormFwdOp(normalized_shape=(256,), eps=1e-6, zero_centered=True)
-    compare_outputs(op(x), test.ref_program(x, None), test.verification(x))
-
-
-class RMSNormGroupedTest(RMSNormGroupedCall, TestBase):
-    pass
+    compare_outputs(op(x), workload.ref_program(x, None), workload.verification(x))
 
 
 def _grouped_call(
@@ -337,14 +325,14 @@ def _grouped_call(
 def test_rms_norm_grouped(dtype, batch, shape, group, centered, weighted, tune) -> None:
     """Each group has independent statistics and its own slice of the full-width weight."""
     call = _grouped_call(dtype, batch, shape, group, weighted, centered)
-    test = RMSNormGroupedTest(call)
+    workload = RMSNormGroupedCall(call)
     op = RMSNormFwdOp(**call.arguments())
-    inputs = test.gen_inputs()
+    inputs = workload.gen_inputs()
     if tune:
         op.request_tune()
         # The tune runs after the first launch, so check compares the tuned program.
         op(*inputs)
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.smoke
@@ -352,25 +340,21 @@ def test_rms_norm_grouped_changing_row_count() -> None:
     """One op must not reuse stale row bounds when the input size changes and changes back."""
     op = RMSNormFwdOp(normalized_shape=(10240,), group_size=2560, eps=1e-6, zero_centered=True)
     for rows in (3, 1, 3):
-        test = RMSNormGroupedTest(_grouped_call(batch=(rows,)))
-        test.check(op, *test.gen_inputs())
-
-
-class RMSNormGroupedOffsetTest(RMSNormGroupedOffsetCall, TestBase):
-    pass
+        workload = RMSNormGroupedCall(_grouped_call(batch=(rows,)))
+        check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_rms_norm_grouped_rounds_once() -> None:
     call = _grouped_call()
-    test = RMSNormGroupedOffsetTest(call)
-    test.check(RMSNormFwdOp(**call.arguments()), *test.gen_inputs())
+    workload = RMSNormGroupedOffsetCall(call)
+    check(workload, RMSNormFwdOp(**call.arguments()), *workload.gen_inputs())
 
 
-def _check_without_weight(test: RMSNormTest, op: RMSNormFwdOp) -> None:
-    """*op* scaling by one matches *test*'s reference without a weight."""
-    x, _ = test.gen_inputs()
-    compare_outputs(op(x), test.ref_program(x, None), test.verification(x))
+def _check_without_weight(workload: RMSNormWorkload, op: RMSNormFwdOp) -> None:
+    """*op* scaling by one matches *workload*'s reference without a weight."""
+    x, _ = workload.gen_inputs()
+    compare_outputs(op(x), workload.ref_program(x, None), workload.verification(x))
 
 
 def _check_served_by(
@@ -378,10 +362,10 @@ def _check_served_by(
 ) -> Kernel:
     """*rows* rows of *n* are right with and without a weight, and *kernel* alone serves them;
     returns that kernel."""
-    test = RMSNormTest(rows, n, dtype, zero_centered=zero_centered)
+    workload = RMSNormWorkload(rows, n, dtype, zero_centered=zero_centered)
     op = RMSNormFwdOp(normalized_shape=(n,), eps=1e-6, zero_centered=zero_centered)
-    test.check(op, *test.gen_inputs())
-    _check_without_weight(test, op)
+    check(workload, op, *workload.gen_inputs())
+    _check_without_weight(workload, op)
     (served,) = op._entries_built("rms_norm").values()
     assert type(served).__name__ == kernel
     return served
@@ -496,10 +480,10 @@ def test_rms_norm_untuned_warp_rows_take_the_fewest_threads_that_fill_the_sm() -
     the SM's threads, and are right with and without a weight past the last full block."""
     props = torch.cuda.get_device_properties(run_device())
     threads = props.max_threads_per_multi_processor // RESIDENT_CTAS[props.major * 10 + props.minor]
-    test = RMSNormTest(33, 256, torch.bfloat16)
+    workload = RMSNormWorkload(33, 256, torch.bfloat16)
     op = RMSNormFwdOp(normalized_shape=(256,), eps=1e-6)
-    test.check(op, *test.gen_inputs())
-    _check_without_weight(test, op)
+    check(workload, op, *workload.gen_inputs())
+    _check_without_weight(workload, op)
     (kernel,) = op._entries_built("rms_norm").values()
     assert kernel.config["threads"] == threads
 
@@ -581,10 +565,6 @@ def test_rms_norm_reads_an_input_and_weight_off_the_vector_boundary(n: int) -> N
     compare_outputs(actual, expected, normalization_verification("RMSNormFwdOp", dtype))
 
 
-class FusedAddRMSNormTest(FusedAddRMSNormWorkload, TestBase):
-    pass
-
-
 class FusedAddRMSNormFixture(FixtureBase):
     PARAMS = [
         (
@@ -612,26 +592,24 @@ class FusedAddRMSNormFixture(FixtureBase):
 
 @FusedAddRMSNormFixture
 def test_fused_add_rms_norm_op(m: int, n: int, dtype: torch.dtype) -> None:
-    test = FusedAddRMSNormTest(m, n, dtype)
-    test.check(FusedAddRMSNormFwdOp(), *test.gen_inputs())
-
-
-class FusedAddRMSNormZeroCenteredOffsetTest(FusedAddRMSNormZeroCenteredOffsetWorkload, TestBase):
-    pass
+    workload = FusedAddRMSNormWorkload(m, n, dtype)
+    check(workload, FusedAddRMSNormFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_fused_add_rms_norm_zero_centered() -> None:
     """A zero-centered call scales the normalized sum by one plus the weight, formed in float32:
     rounded to bfloat16 first, it moves outputs these inputs hold exactly."""
-    test = FusedAddRMSNormZeroCenteredOffsetTest(1024, 4096, torch.bfloat16, zero_centered=True)
-    test.check(FusedAddRMSNormFwdOp(zero_centered=True), *test.gen_inputs())
+    workload = FusedAddRMSNormZeroCenteredOffsetWorkload(
+        1024, 4096, torch.bfloat16, zero_centered=True
+    )
+    check(workload, FusedAddRMSNormFwdOp(zero_centered=True), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_fused_add_rms_norm_zero_centered_float16() -> None:
-    test = FusedAddRMSNormTest(1024, 4096, torch.float16, zero_centered=True)
-    test.check(FusedAddRMSNormFwdOp(zero_centered=True), *test.gen_inputs())
+    workload = FusedAddRMSNormWorkload(1024, 4096, torch.float16, zero_centered=True)
+    check(workload, FusedAddRMSNormFwdOp(zero_centered=True), *workload.gen_inputs())
 
 
 @pytest.mark.sm90
@@ -639,8 +617,8 @@ def test_fused_add_rms_norm_zero_centered_float16() -> None:
 @pytest.mark.smoke
 def test_fused_add_rms_norm_graph_replay() -> None:
     """Qwen3.8-27B's decode call, one zero-centered bfloat16 row."""
-    test = FusedAddRMSNormTest(1, 5120, torch.bfloat16, zero_centered=True)
-    check_replay(test, FusedAddRMSNormFwdOp(zero_centered=True))
+    workload = FusedAddRMSNormWorkload(1, 5120, torch.bfloat16, zero_centered=True)
+    check_replay(workload, FusedAddRMSNormFwdOp(zero_centered=True))
 
 
 @pytest.mark.smoke
@@ -651,8 +629,8 @@ def test_fused_add_rms_norm_views(view: str, dtype: torch.dtype) -> None:
     n = 4096
     x, residual = _view(view, n, dtype), _view(view, n, dtype)
     weight = torch.randn(n, dtype=dtype, device=run_device())
-    test = FusedAddRMSNormTest(x.numel() // n, n, dtype)
-    y_ref, add_ref = test.ref_program(x.contiguous(), residual.contiguous(), weight)
+    workload = FusedAddRMSNormWorkload(x.numel() // n, n, dtype)
+    y_ref, add_ref = workload.ref_program(x.contiguous(), residual.contiguous(), weight)
     y, residual_out = FusedAddRMSNormFwdOp()(x, residual, weight)
     compare_outputs(y, y_ref, norm_verification(dtype))
     compare_outputs(residual_out, add_ref, norm_verification(dtype))
@@ -661,8 +639,8 @@ def test_fused_add_rms_norm_views(view: str, dtype: torch.dtype) -> None:
 @pytest.mark.smoke
 def test_fused_add_rms_norm_reads_inputs_off_the_vector_boundary() -> None:
     """A contiguous input, residual and weight may start anywhere in their storage."""
-    test = FusedAddRMSNormTest(4, 1024, torch.float16)
-    test.check(FusedAddRMSNormFwdOp(), *(misaligned(t) for t in test.gen_inputs()))
+    workload = FusedAddRMSNormWorkload(4, 1024, torch.float16)
+    check(workload, FusedAddRMSNormFwdOp(), *(misaligned(t) for t in workload.gen_inputs()))
 
 
 @pytest.mark.smoke

@@ -2,17 +2,12 @@ import pytest
 import torch
 
 from tests.misaligned import misaligned
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops._kernels.mamba import SelectiveScanCall
 from tileops.mamba import SelectiveScanFwdOp
 from workloads.device import run_device
 from workloads.mamba import SelectiveScanFwdCall
 from workloads.workload_base import manifest_call
-
-
-class SelectiveScanFwdTest(SelectiveScanFwdCall, TestBase):
-    pass
-
 
 _SMOKE = pytest.mark.smoke
 _FULL = pytest.mark.full
@@ -139,9 +134,9 @@ def test_selective_scan(batch, seqlen, dim, dstate, groups, dtype, some, softplu
         delta_softplus=softplus,
         some=some,
     )
-    test = SelectiveScanFwdTest(call)
+    workload = SelectiveScanFwdCall(call)
     op = SelectiveScanFwdOp(**call.arguments())
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -174,8 +169,8 @@ def test_selective_scan_growing_rates(packed, carried, sign, drive, rate) -> Non
         delta_softplus=False,
         some=some,
     )
-    test = SelectiveScanFwdTest(call)
-    u, delta, A, B, C, D, z, delta_bias, seq_idx, initial_states = test.gen_inputs()
+    workload = SelectiveScanFwdCall(call)
+    u, delta, A, B, C, D, z, delta_bias, seq_idx, initial_states = workload.gen_inputs()
     # exp(6) a step: a lane's 16-step segment grows by exp(96), past float32. A state of
     # 1e-10 overflows at step 19; one driven by 1e-30 a step, at step 26; one driven by
     # 1e38 a step under a zero rate, at step 2.
@@ -191,7 +186,7 @@ def test_selective_scan_growing_rates(packed, carried, sign, drive, rate) -> Non
     if carried:
         initial_states = torch.full_like(initial_states, 1e-10)
     op = SelectiveScanFwdOp(**call.arguments())
-    test.check(op, u, delta, A, B, C, D, z, delta_bias, seq_idx, initial_states)
+    check(workload, op, u, delta, A, B, C, D, z, delta_bias, seq_idx, initial_states)
 
 
 @pytest.mark.smoke

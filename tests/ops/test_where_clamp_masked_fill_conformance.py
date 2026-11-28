@@ -4,7 +4,7 @@ broadcasting, and Tensor-bound and one-sided forms."""
 import pytest
 import torch
 
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from workloads.device import run_device
 from workloads.elementwise import ElementwiseWorkload, Every16BitCase, FullRangeCase
 
@@ -35,7 +35,7 @@ def test_where_broadcast_parity(cond_shape, inp_shape, other_shape, dtype):
     op = WhereFwdOp()
 
     workload = ElementwiseWorkload(type(op).__name__, (cond, inp, other))
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -77,7 +77,7 @@ def test_clamp_tensor_bounds_parity(input_shape, min_shape, max_shape, dtype):
     op = ClampFwdOp()
 
     workload = ElementwiseWorkload(type(op).__name__, (inp, mn, mx))
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -114,11 +114,11 @@ def test_one_clamp_instance_serves_clamp_and_both_one_sided_forms():
 
     op = ClampFwdOp()
     workload = ElementwiseWorkload(type(op).__name__, (inp, mn, mx))
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     workload = ElementwiseWorkload(type(op).__name__, (inp, mn, None))
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     workload = ElementwiseWorkload(type(op).__name__, (inp, None, mx))
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -138,7 +138,7 @@ def test_clamp_min_only_tensor(input_shape, min_shape):
     op = ClampFwdOp()
 
     workload = ElementwiseWorkload(type(op).__name__, (inp, mn))
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -158,7 +158,7 @@ def test_clamp_max_only_tensor(input_shape, max_shape):
     op = ClampFwdOp()
 
     workload = ElementwiseWorkload(type(op).__name__, (inp, None, mx))
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -172,7 +172,7 @@ def test_clamp_number_bounds_every_16bit_value(dtype, min_val, max_val):
     op = ClampFwdOp()
 
     workload = Every16BitCase(dtype, type(op).__name__, min_val, max_val)
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
@@ -206,7 +206,7 @@ def test_clamp_tensor_bounds_every_16bit_value(dtype, has_min, has_max, broadcas
     workload = ElementwiseWorkload(
         type(op).__name__, (x, lo if has_min else None, hi if has_max else None)
     )
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 # A NaN in the input or a bound gives NaN, as torch.clamp does; float32's min and max drop NaN
@@ -226,7 +226,7 @@ def test_clamp_tensor_nan_propagation():
     op = ClampFwdOp()
 
     workload = ElementwiseWorkload(type(op).__name__, (x, mn, mx))
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -241,7 +241,7 @@ def test_clamp_tensor_nan_propagation_broadcast_bounds():
     op = ClampFwdOp()
 
     workload = ElementwiseWorkload(type(op).__name__, (x, mn, mx))
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -256,7 +256,7 @@ def test_clamp_min_only_nan_propagation():
     op = ClampFwdOp()
 
     workload = ElementwiseWorkload(type(op).__name__, (x, mn))
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -271,7 +271,7 @@ def test_clamp_max_only_nan_propagation():
     op = ClampFwdOp()
 
     workload = ElementwiseWorkload(type(op).__name__, (x, None, mx))
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 # MaskedFillFwdOp: a 0-dim Tensor or a Number value
@@ -338,7 +338,7 @@ def test_masked_fill_tensor_value(input_shape, mask_shape, dtype):
     op = MaskedFillFwdOp()
 
     workload = ElementwiseWorkload(type(op).__name__, (inp, mask, value))
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -365,7 +365,7 @@ def test_masked_fill_scalar_broadcast_mask(input_shape, mask_shape, dtype, value
     op = MaskedFillFwdOp()
 
     workload = ElementwiseWorkload(type(op).__name__, (inp, mask, value))
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -375,7 +375,7 @@ def test_masked_fill_scalar_long_int64():
 
     n = 16_777_216
     workload = FullRangeCase((((n,), torch.int64), ((n,), torch.bool)), "MaskedFillFwdOp", 7)
-    TestBase.check(workload, MaskedFillFwdOp(), *workload.gen_inputs())
+    check(workload, MaskedFillFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -404,4 +404,4 @@ def test_uint8_selector_tuned(op_name):
     op = getattr(ops, name)()
     op.request_tune()
     workload = ElementwiseWorkload(name, inputs)
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())

@@ -2,20 +2,18 @@ from __future__ import annotations
 
 import logging
 import threading
-from abc import abstractmethod
 from typing import Any
 
 import pytest
 import torch
 
 from workloads.numerics import Request, verify
-from workloads.workload_base import FixtureBase, FixtureMeta, WorkloadBase
+from workloads.workload_base import FixtureBase, WorkloadBase
 
 # Canonical import hub: tests import fixture types from here, not workloads.
 __all__ = [
     "FixtureBase",
-    "FixtureMeta",
-    "TestBase",
+    "check",
 ]
 
 _logger = logging.getLogger("tileops._ops")
@@ -38,70 +36,52 @@ def _by_signature(op: object, run: Any) -> Any:
     return call
 
 
-class TestBase(WorkloadBase):
-    """Abstract base class for op correctness testing.
+def check(workload: WorkloadBase, op, *inputs: torch.Tensor, runs=None) -> None:
+    """Verify *workload*'s declaration and attribute the result to its Op.
 
-    The concrete workload supplies gen_inputs(), ref_program() and verification().
-    Provides check() for comparing op output against reference.
+    Numerical policy belongs to ``workload.verification()``, never to the call site. *runs*
+    is a compiled or wrapped form of *op*, never a kernel: what executes reaches the kernel
+    through the op's dispatch. *inputs* are in signature order; the op receives a
+    ``kw_only`` one by name.
     """
+    from tileops._kernels.kernel_base import Kernel
+    from tileops._ops.op_base import Op
 
-    __test__ = False
-
-    @abstractmethod
-    def ref_program(self, *inputs: Any) -> Any:
-        """Reference implementation for correctness checking.
-
-        Supplied by the concrete workload. Returns the same outputs as the op under test,
-        using a simpler/trusted implementation (e.g. PyTorch built-ins).
-        """
-        raise NotImplementedError
-
-    def check(self, op, *inputs: torch.Tensor, runs=None) -> None:
-        """Verify a workload's declaration and attribute the result to its Op.
-
-        Numerical policy belongs to verification(), never to the call site. *runs* is a
-        compiled or wrapped form of *op*, never a kernel: what executes reaches the kernel
-        through the op's dispatch. *inputs* are in signature order; the op receives a
-        ``kw_only`` one by name.
-        """
-        from tileops._kernels.kernel_base import Kernel
-        from tileops._ops.op_base import Op
-
-        _check_result.op_name = None
-        _check_result.op_module = None
-        _check_result.max_abs_err = None
-        _check_result.checked_outputs = 0
-        name, module = type(op).__name__, type(op).__module__
-        # Raised before the reference runs.
-        if not isinstance(op, Op):
-            raise AssertionError(
-                f"check() takes the Op the result belongs to, got {name}; "
-                f"pass a compiled or wrapped form of it as runs="
-            )
-        if isinstance(getattr(runs, "__self__", runs), Kernel):
-            raise AssertionError(
-                "runs= takes a compiled or wrapped form of the op; reach a kernel through the "
-                "op's dispatch, registering it with register_kernel_type"
-            )
-        _check_result.op_name = name
-        _check_result.op_module = module
-        result = verify(
-            self.ref_program,
-            inputs,
-            evidence=self.verification(*inputs),
-            requests={name: Request(_by_signature(op, op if runs is None else runs), inputs)},
-        )[name]
-        if not result.checked_outputs:
-            pytest.skip(result.unchecked_reason)
-        _check_result.checked_outputs = result.checked_outputs
-        _check_result.max_abs_err = result.max_abs_err
-        _logger.info(
-            "op=%s module=%s status=pass checked_outputs=%s max_abs_err=%s",
-            name,
-            module,
-            result.checked_outputs,
-            result.max_abs_err,
+    _check_result.op_name = None
+    _check_result.op_module = None
+    _check_result.max_abs_err = None
+    _check_result.checked_outputs = 0
+    name, module = type(op).__name__, type(op).__module__
+    # Raised before the reference runs.
+    if not isinstance(op, Op):
+        raise AssertionError(
+            f"check() takes the Op the result belongs to, got {name}; "
+            f"pass a compiled or wrapped form of it as runs="
         )
+    if isinstance(getattr(runs, "__self__", runs), Kernel):
+        raise AssertionError(
+            "runs= takes a compiled or wrapped form of the op; reach a kernel through the "
+            "op's dispatch, registering it with register_kernel_type"
+        )
+    _check_result.op_name = name
+    _check_result.op_module = module
+    result = verify(
+        workload.ref_program,
+        inputs,
+        evidence=workload.verification(*inputs),
+        requests={name: Request(_by_signature(op, op if runs is None else runs), inputs)},
+    )[name]
+    if not result.checked_outputs:
+        pytest.skip(result.unchecked_reason)
+    _check_result.checked_outputs = result.checked_outputs
+    _check_result.max_abs_err = result.max_abs_err
+    _logger.info(
+        "op=%s module=%s status=pass checked_outputs=%s max_abs_err=%s",
+        name,
+        module,
+        result.checked_outputs,
+        result.max_abs_err,
+    )
 
 
 def op_preferring(op_cls, name: str, kernel_cls, *args, **kwargs):
@@ -122,14 +102,14 @@ def smoke_first(cases: list) -> list:
     return sorted(cases, key=lambda case: case.marks[0].name != "smoke")
 
 
-def check_strided_in_place(test: TestBase, op) -> None:
-    """Check *op* against *test*'s reference on its strided view, then that an in-place call
+def check_strided_in_place(workload: WorkloadBase, op) -> None:
+    """Check *op* against *workload*'s reference on its strided view, then that an in-place call
     writes only the view's elements of the wider tensor and returns the view itself."""
-    test.check(op, *test.gen_inputs())
-    (x,) = test.gen_inputs()
+    check(workload, op, *workload.gen_inputs())
+    (x,) = workload.gen_inputs()
     wide = x._base
     before = wide.clone()
     assert op(x)[2] is x
     kept = torch.ones_like(wide, dtype=torch.bool)
-    kept[test.index] = False
+    kept[workload.index] = False
     assert torch.equal(wide[kept], before[kept])

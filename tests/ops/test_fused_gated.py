@@ -5,7 +5,7 @@ import torch
 
 from tests.cuda_graph_contract import check_replay
 from tests.misaligned import misaligned
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._ops.elementwise import GELUAndMulFwdOp, SiLUAndMulFwdOp
 from workloads.device import run_device
 from workloads.elementwise import (
@@ -40,24 +40,20 @@ class SiLUAndMulFixture(FixtureBase):
     ]
 
 
-class SiLUAndMulTest(SiLUAndMulCase, TestBase):
-    pass
-
-
 @SiLUAndMulFixture
 def test_silu_and_mul_op(m: int, n: int, dtype: torch.dtype) -> None:
-    test = SiLUAndMulTest(m, n, dtype)
+    workload = SiLUAndMulCase(m, n, dtype)
     op = SiLUAndMulFwdOp()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_silu_and_mul_tuned() -> None:
     """Tuned mode picks a launch whose result matches the reference."""
-    test = SiLUAndMulTest(1024, 1536, torch.bfloat16)
+    workload = SiLUAndMulCase(1024, 1536, torch.bfloat16)
     op = SiLUAndMulFwdOp()
     op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -65,8 +61,8 @@ def test_silu_and_mul_lazy_op_rebinds_shape() -> None:
     """Lazy construction should not lock the op to the first runtime shape."""
     op = SiLUAndMulFwdOp()
     for m, n in [(32, 64), (16, 128)]:
-        test = SiLUAndMulTest(m, n, torch.float16)
-        test.check(op, *test.gen_inputs())
+        workload = SiLUAndMulCase(m, n, torch.float16)
+        check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -74,7 +70,7 @@ def test_silu_and_mul_matches_torch_at_every_bfloat16_gate() -> None:
     """A bfloat16 gate's fast float32 divide rounds to torch's result at every gate, near
     gate -88 too, where the divisor passes 2**126."""
     workload = SiLUAndMulGateSweepWorkload()
-    TestBase.check(workload, SiLUAndMulFwdOp(), *workload.gen_inputs())
+    check(workload, SiLUAndMulFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -82,15 +78,15 @@ def test_silu_and_mul_matches_torch_at_every_bfloat16_gate() -> None:
 def test_silu_and_mul_multiplies_the_unrounded_activation(dtype: torch.dtype) -> None:
     """Zeros, subnormals, extremes and nonfinite gates times the same values."""
     workload = SiLUAndMulEdgeWorkload(dtype)
-    TestBase.check(workload, SiLUAndMulFwdOp(), *workload.gen_inputs())
+    check(workload, SiLUAndMulFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_silu_and_mul_input_off_a_vector_boundary() -> None:
     """A contiguous input starting one element past a 16-byte boundary matches the reference."""
-    test = SiLUAndMulTest(64, 1024, torch.bfloat16)
-    (aligned,) = test.gen_inputs()
-    test.check(SiLUAndMulFwdOp(), misaligned(aligned))
+    workload = SiLUAndMulCase(64, 1024, torch.bfloat16)
+    (aligned,) = workload.gen_inputs()
+    check(workload, SiLUAndMulFwdOp(), misaligned(aligned))
 
 
 class SiLUAndMulClampedFixture(FixtureBase):
@@ -126,7 +122,7 @@ def test_silu_and_mul_clamps_and_scales_rows(
     x = (torch.randn(m, 2 * n, device=run_device()) * 8).to(dtype)
     scale = torch.rand(m, device=run_device()) * 1.5 if scaled else None
     workload = ElementwiseWorkload("SiLUAndMulFwdOp", (x, scale), swiglu_limit=swiglu_limit)
-    TestBase.check(workload, SiLUAndMulFwdOp(swiglu_limit=swiglu_limit), x, scale)
+    check(workload, SiLUAndMulFwdOp(swiglu_limit=swiglu_limit), x, scale)
 
 
 @pytest.mark.smoke
@@ -136,7 +132,7 @@ def test_silu_and_mul_clamp_keeps_nan(dtype: torch.dtype) -> None:
     of -inf stays -inf."""
     workload = SiLUAndMulClampEdgeWorkload(dtype)
     x, scale = workload.gen_inputs()
-    TestBase.check(workload, SiLUAndMulFwdOp(swiglu_limit=10.0), x, scale)
+    check(workload, SiLUAndMulFwdOp(swiglu_limit=10.0), x, scale)
 
 
 @pytest.mark.sm90
@@ -185,24 +181,20 @@ class GELUAndMulFixture(FixtureBase):
     ]
 
 
-class GELUAndMulTest(GELUAndMulCase, TestBase):
-    pass
-
-
 @GELUAndMulFixture
 def test_gelu_and_mul_op(m: int, n: int, dtype: torch.dtype, approximate: str) -> None:
-    test = GELUAndMulTest(m, n, dtype, approximate)
+    workload = GELUAndMulCase(m, n, dtype, approximate)
     op = GELUAndMulFwdOp(approximate=approximate)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_gelu_and_mul_tuned() -> None:
     """Tuned mode picks a launch whose result matches the reference on a row off the vector width."""
-    test = GELUAndMulTest(1, 1001, torch.bfloat16)
+    workload = GELUAndMulCase(1, 1001, torch.bfloat16)
     op = GELUAndMulFwdOp()
     op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -210,7 +202,7 @@ def test_gelu_and_mul_tuned() -> None:
 def test_gelu_and_mul_tails_are_exact(dtype: torch.dtype) -> None:
     """A gate past GELU's tails gives exactly 0 or exactly gate * value, nonfinite gates too."""
     workload = GELUAndMulTailWorkload(dtype)
-    TestBase.check(workload, GELUAndMulFwdOp(), *workload.gen_inputs())
+    check(workload, GELUAndMulFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -228,7 +220,7 @@ def test_gelu_tanh_and_mul_matches_the_tail_at_every_gate(dtype: torch.dtype) ->
     values = (1.0, torch.finfo(dtype).max, float("inf"))
     x = torch.stack([torch.cat([gate, torch.full_like(gate, v)]) for v in values])
     workload = ElementwiseWorkload("GELUAndMulFwdOp", (x,), approximate="tanh")
-    TestBase.check(workload, GELUAndMulFwdOp(approximate="tanh"), x)
+    check(workload, GELUAndMulFwdOp(approximate="tanh"), x)
 
 
 @pytest.mark.smoke

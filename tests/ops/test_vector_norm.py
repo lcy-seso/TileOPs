@@ -5,17 +5,13 @@ import math
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._ops.reduction.vector_norm import VectorNormFwdOp
 from workloads.device import run_device
 from workloads.numerics import compare_outputs
 from workloads.reduction import VectorNormCase, vector_norm_verification
 
 _ORD_MAP = {"l1": 1, "l2": 2, "inf": math.inf}
-
-
-class VectorNormTest(VectorNormCase, TestBase):
-    pass
 
 
 def _make_op(op_kind: str, dim=-1, keepdim: bool = False) -> VectorNormFwdOp:
@@ -46,8 +42,8 @@ def _row_cases() -> list:
 
 @pytest.mark.parametrize("op_kind, m, n, dtype", _row_cases())
 def test_vector_norm_rows(op_kind: str, m: int, n: int, dtype: torch.dtype) -> None:
-    test = VectorNormTest(m, n, dtype, op_kind)
-    test.check(_make_op(op_kind), *test.gen_inputs())
+    workload = VectorNormCase(m, n, dtype, op_kind)
+    check(workload, _make_op(op_kind), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -129,10 +125,10 @@ def test_vector_norm_tiled_autotune() -> None:
     fall back on an exact divisor, which hides a mis-derived tile_n.
     """
     m, n, dtype = 4, 39999, torch.float16
-    test = VectorNormTest(m, n, dtype, "l2")
+    workload = VectorNormCase(m, n, dtype, "l2")
     op = _make_op("l2")
     op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke

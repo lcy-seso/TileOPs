@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from tests.cuda_graph_contract import CapturedGraph, check_replay
-from tests.workload_test_base import TestBase, smoke_first
+from tests.workload_test_base import check, smoke_first
 from tileops._kernels.kernel_base import Kernel
 from tileops._kernels.sequence_modeling import HyperConnectionPreCall as PreCallSpec
 from tileops._kernels.sequence_modeling import HyperConnectionPreKernel
@@ -26,19 +26,6 @@ from workloads.sequence_modeling import (
     HyperConnectionPreCall,
 )
 from workloads.workload_base import manifest_call
-
-
-class HyperConnectionPreTest(HyperConnectionPreCall, TestBase):
-    pass
-
-
-class HyperConnectionPostTest(HyperConnectionPostWorkload, TestBase):
-    pass
-
-
-class HyperConnectionHeadTest(HyperConnectionHeadWorkload, TestBase):
-    pass
-
 
 _SMOKE = pytest.mark.smoke
 _FULL = pytest.mark.full
@@ -80,8 +67,8 @@ _CASES = (
 @pytest.mark.parametrize("leading, c, params", smoke_first(list(_CASES)))
 def test_hyper_connection_pre(leading, c, params) -> None:
     call = _call(leading, params, c)
-    test = HyperConnectionPreTest(call)
-    test.check(HyperConnectionPreFwdOp(**call.arguments()), *test.gen_inputs())
+    workload = HyperConnectionPreCall(call)
+    check(workload, HyperConnectionPreFwdOp(**call.arguments()), *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -91,10 +78,10 @@ def test_hyper_connection_pre_reads_a_broadcast_residual(leading) -> None:
     """The first block's residual, one stream expanded to all four along a stride-0 axis,
     gives what its materialized streams give."""
     call = _call(leading, _DSV4)
-    test = HyperConnectionPreTest(call)
-    residual, fn, hc_scale, hc_base = test.gen_inputs()
+    workload = HyperConnectionPreCall(call)
+    residual, fn, hc_scale, hc_base = workload.gen_inputs()
     residual = residual[..., :1, :].expand_as(residual)
-    test.check(HyperConnectionPreFwdOp(**call.arguments()), residual, fn, hc_scale, hc_base)
+    check(workload, HyperConnectionPreFwdOp(**call.arguments()), residual, fn, hc_scale, hc_base)
 
 
 @pytest.mark.in_tree_kernels
@@ -112,8 +99,8 @@ def test_hyper_connection_pre_serves_new_token_counts_from_one_kernel(
     to the same kernel."""
     op = HyperConnectionPreFwdOp(**_DSV4)
     for tokens in token_counts:
-        test = HyperConnectionPreTest(_call([tokens], _DSV4))
-        test.check(op, *test.gen_inputs())
+        workload = HyperConnectionPreCall(_call([tokens], _DSV4))
+        check(workload, op, *workload.gen_inputs())
     (kernel,) = op.iter_kernels()
     assert len(kernel._generation.programs) == program_sets
 
@@ -126,14 +113,14 @@ def test_hyper_connection_pre_graph_replay() -> None:
     addresses: each mix launch, which may start while its projection drains, reads that
     replay's splits, and the second projection does not overwrite the first's early."""
     call = _call([1], _DSV4)
-    test = HyperConnectionPreTest(call)
+    workload = HyperConnectionPreCall(call)
     op = HyperConnectionPreFwdOp(**call.arguments())
-    first, second = test.gen_inputs(), test.gen_inputs()
+    first, second = workload.gen_inputs(), workload.gen_inputs()
     graph = CapturedGraph((op, first), (op, second))
-    graph.renew(test.gen_inputs(), test.gen_inputs())
+    graph.renew(workload.gen_inputs(), workload.gen_inputs())
     graph.replay()
-    test.check(op, *first, runs=lambda *args: graph.outputs[0])
-    test.check(op, *second, runs=lambda *args: graph.outputs[1])
+    check(workload, op, *first, runs=lambda *args: graph.outputs[0])
+    check(workload, op, *second, runs=lambda *args: graph.outputs[1])
 
 
 @pytest.mark.smoke
@@ -153,7 +140,7 @@ def test_hyper_connection_pre_refuses_what_no_kernel_serves(n, c, params, reason
     call = _call([2], params, c, n)
     op = HyperConnectionPreFwdOp(**call.arguments())
     with pytest.raises(OpNotAvailableError, match=reason):
-        op(*HyperConnectionPreTest(call).gen_inputs())
+        op(*HyperConnectionPreCall(call).gen_inputs())
     assert not op._entries_built("hyper_connection_pre")
 
 
@@ -204,16 +191,16 @@ def test_hyper_connection_pre_fits_its_projection_ring_to_shared_memory() -> Non
     ],
 )
 def test_hyper_connection_post_op(shape, n, c, mix_dtype) -> None:
-    test = HyperConnectionPostTest(shape, n, c, mix_dtype)
-    test.check(HyperConnectionPostFwdOp(), *test.gen_inputs())
+    workload = HyperConnectionPostWorkload(shape, n, c, mix_dtype)
+    check(workload, HyperConnectionPostFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_hyper_connection_post_reads_strided_inputs() -> None:
     """Views that are not contiguous: every other token of x and of the residual streams, and
     mixes stored transposed."""
-    test = HyperConnectionPostTest((6,), 4, 512)
-    x, residual, post, comb = test.gen_inputs()
+    workload = HyperConnectionPostWorkload((6,), 4, 512)
+    x, residual, post, comb = workload.gen_inputs()
     device = run_device()
     x_wide = torch.randn(12, 512, dtype=x.dtype, device=device)
     x_wide[::2] = x
@@ -221,7 +208,7 @@ def test_hyper_connection_post_reads_strided_inputs() -> None:
     residual_wide[::2] = residual
     comb_t = comb.transpose(-1, -2).contiguous().transpose(-1, -2)
     assert not (x_wide[::2].is_contiguous() or comb_t.is_contiguous())
-    test.check(HyperConnectionPostFwdOp(), x_wide[::2], residual_wide[::2], post, comb_t)
+    check(workload, HyperConnectionPostFwdOp(), x_wide[::2], residual_wide[::2], post, comb_t)
 
 
 @pytest.mark.smoke
@@ -251,8 +238,8 @@ def test_hyper_connection_post_rejects_dtypes_outside_the_signature(
 def test_hyper_connection_post_serves_new_token_counts_from_one_kernel() -> None:
     op = HyperConnectionPostFwdOp()
     for tokens in (3, 70):
-        test = HyperConnectionPostTest((tokens,), 4, 1024)
-        test.check(op, *test.gen_inputs())
+        workload = HyperConnectionPostWorkload((tokens,), 4, 1024)
+        check(workload, op, *workload.gen_inputs())
     assert len(list(op.iter_kernels())) == 1
 
 
@@ -261,7 +248,7 @@ def test_hyper_connection_post_serves_new_token_counts_from_one_kernel() -> None
 @pytest.mark.smoke
 def test_hyper_connection_post_graph_replay() -> None:
     """DeepSeek-V4-Flash's decode call."""
-    check_replay(HyperConnectionPostTest((1, 1), 4, 4096), HyperConnectionPostFwdOp())
+    check_replay(HyperConnectionPostWorkload((1, 1), 4, 4096), HyperConnectionPostFwdOp())
 
 
 @pytest.mark.smoke
@@ -270,9 +257,9 @@ def test_hyper_connection_post_refuses_streams_past_the_register_budget() -> Non
     """Nine streams give a thread 81 comb_res_mix entries to hold."""
     from tileops.backend import OpNotAvailableError
 
-    test = HyperConnectionPostTest((2,), 9, 64)
+    workload = HyperConnectionPostWorkload((2,), 9, 64)
     with pytest.raises(OpNotAvailableError, match="register budget"):
-        HyperConnectionPostFwdOp()(*test.gen_inputs())
+        HyperConnectionPostFwdOp()(*workload.gen_inputs())
 
 
 def _head_tokens(program: str) -> int:
@@ -313,22 +300,22 @@ def _head_tokens(program: str) -> int:
     ],
 )
 def test_hyper_connection_head_op(program, n, c) -> None:
-    test = HyperConnectionHeadTest((_head_tokens(program),), n, c)
-    test.check(HyperConnectionHeadFwdOp(1e-6, 1e-6), *test.gen_inputs())
+    workload = HyperConnectionHeadWorkload((_head_tokens(program),), n, c)
+    check(workload, HyperConnectionHeadFwdOp(1e-6, 1e-6), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_hyper_connection_head_folds_leading_axes() -> None:
-    test = HyperConnectionHeadTest((2, 3), 4, 512)
-    test.check(HyperConnectionHeadFwdOp(1e-6, 1e-6), *test.gen_inputs())
+    workload = HyperConnectionHeadWorkload((2, 3), 4, 512)
+    check(workload, HyperConnectionHeadFwdOp(1e-6, 1e-6), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_hyper_connection_head_reads_strided_inputs() -> None:
     """Views that are not contiguous: every other token of the streams and every other
     stream bias, and hc_fn stored transposed."""
-    test = HyperConnectionHeadTest((6,), 4, 512)
-    hidden_states, hc_fn, hc_scale, hc_base = test.gen_inputs()
+    workload = HyperConnectionHeadWorkload((6,), 4, 512)
+    hidden_states, hc_fn, hc_scale, hc_base = workload.gen_inputs()
     device = run_device()
     wide = torch.randn(12, 4, 512, dtype=hidden_states.dtype, device=device)
     wide[::2] = hidden_states
@@ -337,7 +324,7 @@ def test_hyper_connection_head_reads_strided_inputs() -> None:
     hc_fn_t = hc_fn.t().contiguous().t()
     views = (wide[::2], hc_fn_t, hc_scale, base_wide[::2])
     assert not any(view.is_contiguous() for view in views if view is not hc_scale)
-    test.check(HyperConnectionHeadFwdOp(1e-6, 1e-6), *views)
+    check(workload, HyperConnectionHeadFwdOp(1e-6, 1e-6), *views)
 
 
 @pytest.mark.smoke
@@ -367,8 +354,8 @@ def test_hyper_connection_head_serves_new_token_counts_from_one_kernel() -> None
     """Token counts reaching the resident and the streamed programs share one kernel."""
     op = HyperConnectionHeadFwdOp(1e-6, 1e-6)
     for tokens in (3, _head_tokens("streamed-4")):
-        test = HyperConnectionHeadTest((tokens,), 4, 1024)
-        test.check(op, *test.gen_inputs())
+        workload = HyperConnectionHeadWorkload((tokens,), 4, 1024)
+        check(workload, op, *workload.gen_inputs())
     assert len(list(op.iter_kernels())) == 1
 
 
@@ -377,7 +364,7 @@ def test_hyper_connection_head_serves_new_token_counts_from_one_kernel() -> None
 @pytest.mark.smoke
 def test_hyper_connection_head_graph_replay() -> None:
     """DeepSeek-V4-Flash's decode call."""
-    check_replay(HyperConnectionHeadTest((1,), 4, 4096), HyperConnectionHeadFwdOp(1e-6, 1e-6))
+    check_replay(HyperConnectionHeadWorkload((1,), 4, 4096), HyperConnectionHeadFwdOp(1e-6, 1e-6))
 
 
 @pytest.mark.smoke
@@ -386,6 +373,6 @@ def test_hyper_connection_head_refuses_streams_past_the_register_budget() -> Non
     """Nine streams give a thread hc_fn vectors of nine streams to hold."""
     from tileops.backend import OpNotAvailableError
 
-    test = HyperConnectionHeadTest((2,), 9, 64)
+    workload = HyperConnectionHeadWorkload((2,), 9, 64)
     with pytest.raises(OpNotAvailableError, match="register budget"):
-        HyperConnectionHeadFwdOp(1e-6, 1e-6)(*test.gen_inputs())
+        HyperConnectionHeadFwdOp(1e-6, 1e-6)(*workload.gen_inputs())

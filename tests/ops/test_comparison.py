@@ -3,17 +3,12 @@
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._ops.elementwise import EqFwdOp, GeFwdOp, GtFwdOp, LeFwdOp, LtFwdOp, NeFwdOp
 from tileops.backend import BUILTIN
 from workloads.device import run_device
 from workloads.elementwise import BinarySameShapeCase, ElementwiseWorkload
 from workloads.numerics import compare_outputs
-
-
-class ComparisonTest(BinarySameShapeCase, TestBase):
-    pass
-
 
 _CMP_OP_CASES = [
     (EqFwdOp, torch.eq),
@@ -41,8 +36,8 @@ class ComparisonFixture(FixtureBase):
 
 @ComparisonFixture
 def test_comparison_op(op_cls, dtype: torch.dtype) -> None:
-    test = ComparisonTest(4_096, dtype, op_cls.__name__)
-    test.check(op_cls(), *test.gen_inputs())
+    workload = BinarySameShapeCase(4_096, dtype, op_cls.__name__)
+    check(workload, op_cls(), *workload.gen_inputs())
 
 
 # Every op on the bias broadcast, whose float16 run builds its bool bytes from the op's
@@ -66,7 +61,7 @@ _BROADCAST_CASES = [
 def test_comparison_broadcast(op_cls, a_shape, b_shape) -> None:
     a = torch.randn(*a_shape, dtype=torch.float16, device=run_device())
     b = torch.randn(*b_shape, dtype=torch.float16, device=run_device())
-    ComparisonTest(a.numel(), a.dtype, op_cls.__name__).check(op_cls(), a, b)
+    check(BinarySameShapeCase(a.numel(), a.dtype, op_cls.__name__), op_cls(), a, b)
 
 
 # Integer and bool operands
@@ -101,8 +96,8 @@ def test_comparison_integer_dtype_eq(dtype: torch.dtype) -> None:
     n = 4_096
     a, b = _gen_int_inputs(n, dtype)
     op = EqFwdOp()
-    test = ComparisonTest(a.numel(), a.dtype, "EqFwdOp")
-    test.check(op, a, b)
+    workload = BinarySameShapeCase(a.numel(), a.dtype, "EqFwdOp")
+    check(workload, op, a, b)
 
 
 class ComparisonOpIntFixture(FixtureBase):
@@ -123,8 +118,8 @@ def test_comparison_op_int32(op_cls, ref_fn) -> None:
     n = 4_096
     a, b = _gen_int_inputs(n, torch.int32)
     op = op_cls()
-    test = ComparisonTest(a.numel(), a.dtype, op_cls.__name__)
-    test.check(op, a, b)
+    workload = BinarySameShapeCase(a.numel(), a.dtype, op_cls.__name__)
+    check(workload, op, a, b)
 
 
 class ComparisonBoolDtypeFixture(FixtureBase):
@@ -146,8 +141,8 @@ def test_comparison_bool_dtype(op_cls, ref_fn) -> None:
     a = torch.randint(0, 2, (n,), device=run_device()).to(torch.bool)
     b = torch.randint(0, 2, (n,), device=run_device()).to(torch.bool)
     op = op_cls()
-    test = ComparisonTest(a.numel(), a.dtype, op_cls.__name__)
-    test.check(op, a, b)
+    workload = BinarySameShapeCase(a.numel(), a.dtype, op_cls.__name__)
+    check(workload, op, a, b)
 
 
 # Dtypes outside the manifest dtype union
@@ -189,7 +184,7 @@ def test_comparison_bool_result_from_int8_storage() -> None:
     a = torch.randn(2, 64, 128, device=run_device(), dtype=torch.float16)
     b = torch.randn(1, 1, 128, device=run_device(), dtype=torch.float16)
     op = GtFwdOp(target=BUILTIN)
-    ComparisonTest(a.numel(), a.dtype, "GtFwdOp").check(op, a, b)
+    check(BinarySameShapeCase(a.numel(), a.dtype, "GtFwdOp"), op, a, b)
 
 
 @pytest.mark.smoke
@@ -244,7 +239,7 @@ def test_comparison_run_broadcast(a_shape, b_shape, dtype) -> None:
     """A row broadcast whose bool result each thread writes from its own contiguous run."""
     a = torch.randn(*a_shape, dtype=dtype, device=run_device())
     b = torch.randn(*b_shape, dtype=dtype, device=run_device())
-    ComparisonTest(a.numel(), a.dtype, "LtFwdOp").check(LtFwdOp(target=BUILTIN), a, b)
+    check(BinarySameShapeCase(a.numel(), a.dtype, "LtFwdOp"), LtFwdOp(target=BUILTIN), a, b)
 
 
 @pytest.mark.in_tree_kernels
@@ -253,4 +248,4 @@ def test_comparison_offset_view() -> None:
     """Operands starting off a 16-byte boundary are read in vectors only after a copy."""
     a = torch.randn(4097, dtype=torch.float32, device=run_device())[1:]
     b = torch.randn(4097, dtype=torch.float32, device=run_device())[1:]
-    ComparisonTest(a.numel(), a.dtype, "LtFwdOp").check(LtFwdOp(target=BUILTIN), a, b)
+    check(BinarySameShapeCase(a.numel(), a.dtype, "LtFwdOp"), LtFwdOp(target=BUILTIN), a, b)

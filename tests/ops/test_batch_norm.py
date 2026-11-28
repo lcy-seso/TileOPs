@@ -8,7 +8,7 @@ import re
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase, smoke_first
+from tests.workload_test_base import FixtureBase, check, smoke_first
 from tileops._kernels.norm.batch_norm import (
     BatchNormFwdTrainKernel,
     BatchNormFwdTrainSplitKernel,
@@ -29,14 +29,6 @@ from workloads.norm import (
     normalization_verification,
 )
 from workloads.numerics import compare_outputs
-
-
-class BatchNormBwdTest(BatchNormBwdWorkload, TestBase):
-    pass
-
-
-class BatchNormFwdTest(BatchNormFwdWorkload, TestBase):
-    pass
 
 
 class BatchNormFwdFixture(FixtureBase):
@@ -107,10 +99,10 @@ class BatchNormBwdFixture(FixtureBase):
 
 @BatchNormFwdFixture
 def test_batch_norm_fwd(N, C, spatial, dtype, training):
-    test = BatchNormFwdTest(N, C, spatial, dtype, training)
-    inputs = test.gen_inputs()
+    workload = BatchNormFwdWorkload(N, C, spatial, dtype, training)
+    inputs = workload.gen_inputs()
     op = BatchNormFwdOp(training=training)
-    test.check(op, *inputs, runs=lambda *args: batch_norm_forward_result(op, *args))
+    check(workload, op, *inputs, runs=lambda *args: batch_norm_forward_result(op, *args))
 
     if training:
         # Repeat from the same initial statistics to detect update races separately.
@@ -123,8 +115,8 @@ def test_batch_norm_fwd(N, C, spatial, dtype, training):
 
 @BatchNormBwdFixture
 def test_batch_norm_bwd(N, C, spatial, dtype):
-    test = BatchNormBwdTest(N, C, spatial, dtype)
-    test.check(BatchNormBwdOp(), *test.gen_inputs())
+    workload = BatchNormBwdWorkload(N, C, spatial, dtype)
+    check(workload, BatchNormBwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -202,8 +194,9 @@ def test_training_updates_a_non_contiguous_running_stat() -> None:
     rv = torch.ones(2 * C, device=run_device(), dtype=torch.float32)[::2]
     assert not rm.is_contiguous()
 
-    workload = BatchNormFwdTest(N, C, (H, W), x.dtype, training=True)
-    workload.check(
+    workload = BatchNormFwdWorkload(N, C, (H, W), x.dtype, training=True)
+    check(
+        workload,
         op,
         x,
         rm,
@@ -380,10 +373,6 @@ def test_channels_split_across_blocks_match_torch(shape) -> None:
     )
 
 
-class BatchNormFarFromZeroTest(BatchNormFarFromZeroWorkload, TestBase):
-    pass
-
-
 # One channel a thread, a block, several blocks, and one block streaming its channel; a
 # block whose threads each hold more than 32 elements (63, one an access), and one whose
 # last threads hold fewer than the others (36 or 32 of 33000).
@@ -438,9 +427,14 @@ def _far_mark(path, dtype, row):
 )
 def test_training_forward_normalizes_channels_far_from_zero(shape, dtype, row) -> None:
     n, c, *spatial = shape
-    test = BatchNormFarFromZeroTest(n, c, tuple(spatial), dtype, row=row)
+    workload = BatchNormFarFromZeroWorkload(n, c, tuple(spatial), dtype, row=row)
     op = BatchNormFwdOp(training=True)
-    test.check(op, *test.gen_inputs(), runs=lambda *args: batch_norm_forward_result(op, *args))
+    check(
+        workload,
+        op,
+        *workload.gen_inputs(),
+        runs=lambda *args: batch_norm_forward_result(op, *args),
+    )
 
 
 @pytest.mark.in_tree_kernels

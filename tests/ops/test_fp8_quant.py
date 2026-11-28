@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from tests.cuda_graph_contract import check_replay
-from tests.workload_test_base import FixtureBase, TestBase, check_strided_in_place
+from tests.workload_test_base import FixtureBase, check, check_strided_in_place
 from tileops.quantization import FP8QuantPerTokenGroupFwdOp
 from workloads.device import run_device
 from workloads.quantization.fp8_quant import (
@@ -11,22 +11,6 @@ from workloads.quantization.fp8_quant import (
     FP8QuantViewWorkload,
     FP8QuantWorkload,
 )
-
-
-class FP8QuantTest(FP8QuantWorkload, TestBase):
-    pass
-
-
-class FP8QuantTiesTest(FP8QuantTiesWorkload, TestBase):
-    pass
-
-
-class FP8QuantViewTest(FP8QuantViewWorkload, TestBase):
-    pass
-
-
-class FP8QuantScaleFloorTest(FP8QuantScaleFloorWorkload, TestBase):
-    pass
 
 
 class FP8QuantFixture(FixtureBase):
@@ -47,17 +31,17 @@ class FP8QuantFixture(FixtureBase):
 
 @FP8QuantFixture
 def test_fp8_quant_op(shape, group_size: int, dtype: torch.dtype) -> None:
-    test = FP8QuantTest(shape, group_size, dtype)
-    test.check(FP8QuantPerTokenGroupFwdOp(group_size), *test.gen_inputs())
+    workload = FP8QuantWorkload(shape, group_size, dtype)
+    check(workload, FP8QuantPerTokenGroupFwdOp(group_size), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_fp8_quant_writes_out_q_and_returns_it() -> None:
-    test = FP8QuantTest((64, 256), 128, torch.bfloat16, out_q=True)
-    x, out_q = test.gen_inputs()
+    workload = FP8QuantWorkload((64, 256), 128, torch.bfloat16, out_q=True)
+    x, out_q = workload.gen_inputs()
     q, _scale, _output = FP8QuantPerTokenGroupFwdOp(128)(x, out_q)
     assert q is out_q
-    test.check(FP8QuantPerTokenGroupFwdOp(128), *test.gen_inputs())
+    check(workload, FP8QuantPerTokenGroupFwdOp(128), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -94,9 +78,9 @@ _UE8M0 = {"eps": 1e-4, "use_ue8m0": True}
 def test_fp8_quant_rounds_scales_up_to_a_power_of_two(
     shape, group_size, dtype, scale_dtype
 ) -> None:
-    test = FP8QuantTest(shape, group_size, dtype, scale_dtype=scale_dtype, **_UE8M0)
+    workload = FP8QuantWorkload(shape, group_size, dtype, scale_dtype=scale_dtype, **_UE8M0)
     op = FP8QuantPerTokenGroupFwdOp(group_size, scale_dtype=scale_dtype, **_UE8M0)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -111,8 +95,10 @@ def test_fp8_quant_rounds_scales_up_to_a_power_of_two(
 def test_fp8_quant_ue8m0_rounds_ties_to_even_and_keeps_signed_zeros(dtype, inplace) -> None:
     """Codes on the midpoint of two e4m3 values round to the even one, a negative value
     rounding to zero keeps its sign, and an all-zero group takes the ``eps`` floor."""
-    test = FP8QuantTiesTest((64, 512), 128, dtype, inplace=inplace, **_UE8M0)
-    test.check(FP8QuantPerTokenGroupFwdOp(128, inplace=inplace, **_UE8M0), *test.gen_inputs())
+    workload = FP8QuantTiesWorkload((64, 512), 128, dtype, inplace=inplace, **_UE8M0)
+    check(
+        workload, FP8QuantPerTokenGroupFwdOp(128, inplace=inplace, **_UE8M0), *workload.gen_inputs()
+    )
 
 
 @pytest.mark.parametrize(
@@ -132,9 +118,9 @@ def test_fp8_quant_ue8m0_floors_scales_at_two_to_the_minus_126(
     ``2 ** -126``, as ``act_quant`` gives a subnormal one."""
     params = {"eps": eps, "use_ue8m0": True, "scale_dtype": scale_dtype, "inplace": inplace}
     # 79 rows leave a last block the block does not fill.
-    test = FP8QuantScaleFloorTest((79, 512), 128, dtype, **params)
+    workload = FP8QuantScaleFloorWorkload((79, 512), 128, dtype, **params)
     op = FP8QuantPerTokenGroupFwdOp(128, **params)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -149,10 +135,10 @@ def test_fp8_quant_ue8m0_floors_scales_at_two_to_the_minus_126(
     ],
 )
 def test_fp8_quant_fake_quantizes_in_place(shape, dtype) -> None:
-    test = FP8QuantTest(shape, 64, dtype, inplace=True, **_UE8M0)
+    workload = FP8QuantWorkload(shape, 64, dtype, inplace=True, **_UE8M0)
     op = FP8QuantPerTokenGroupFwdOp(64, inplace=True, **_UE8M0)
-    test.check(op, *test.gen_inputs())
-    (x,) = test.gen_inputs()
+    check(workload, op, *workload.gen_inputs())
+    (x,) = workload.gen_inputs()
     q, scale, output = op(x)
     assert q is None and scale is None and output is x
 
@@ -171,8 +157,10 @@ def test_fp8_quant_fake_quantizes_in_place(shape, dtype) -> None:
 )
 def test_fp8_quant_fake_quantizes_a_strided_view_in_place(wide_shape, index) -> None:
     x_shape = torch.empty(wide_shape, device="meta")[index].shape
-    test = FP8QuantViewTest(wide_shape, index, x_shape, 64, torch.bfloat16, inplace=True, **_UE8M0)
-    check_strided_in_place(test, FP8QuantPerTokenGroupFwdOp(64, inplace=True, **_UE8M0))
+    workload = FP8QuantViewWorkload(
+        wide_shape, index, x_shape, 64, torch.bfloat16, inplace=True, **_UE8M0
+    )
+    check_strided_in_place(workload, FP8QuantPerTokenGroupFwdOp(64, inplace=True, **_UE8M0))
 
 
 @pytest.mark.sm90
@@ -196,8 +184,8 @@ def test_fp8_quant_fake_quantizes_a_strided_view_in_place(wide_shape, index) -> 
 )  # fmt: skip
 def test_fp8_quant_graph_replay(shape, scale_dtype) -> None:
     """DeepSeek-V4-Flash's decode-step quantization of an FP8 GEMM input."""
-    test = FP8QuantTest(shape, 128, torch.bfloat16, scale_dtype=scale_dtype, **_UE8M0)
-    check_replay(test, FP8QuantPerTokenGroupFwdOp(128, scale_dtype=scale_dtype, **_UE8M0))
+    workload = FP8QuantWorkload(shape, 128, torch.bfloat16, scale_dtype=scale_dtype, **_UE8M0)
+    check_replay(workload, FP8QuantPerTokenGroupFwdOp(128, scale_dtype=scale_dtype, **_UE8M0))
 
 
 @pytest.mark.sm90
@@ -209,14 +197,18 @@ def test_fp8_quant_in_place_graph_replay(wide_shape) -> None:
     its RoPE dimensions; its compressed KV, ``(1, 1, 512)``, folds into the same rows."""
     index = (..., slice(None, -64))
     x_shape = torch.empty(wide_shape, device="meta")[index].shape
-    test = FP8QuantViewTest(wide_shape, index, x_shape, 64, torch.bfloat16, inplace=True, **_UE8M0)
-    check_replay(test, FP8QuantPerTokenGroupFwdOp(64, inplace=True, **_UE8M0))
+    workload = FP8QuantViewWorkload(
+        wide_shape, index, x_shape, 64, torch.bfloat16, inplace=True, **_UE8M0
+    )
+    check_replay(workload, FP8QuantPerTokenGroupFwdOp(64, inplace=True, **_UE8M0))
 
 
 @pytest.mark.smoke
 def test_fp8_quant_reads_tma_alignment_only_for_column_major_scales() -> None:
-    test = FP8QuantTest((64, 256), 128, torch.bfloat16)
-    test.check(FP8QuantPerTokenGroupFwdOp(128, tma_aligned_scales=True), *test.gen_inputs())
+    workload = FP8QuantWorkload((64, 256), 128, torch.bfloat16)
+    check(
+        workload, FP8QuantPerTokenGroupFwdOp(128, tma_aligned_scales=True), *workload.gen_inputs()
+    )
 
 
 @pytest.mark.smoke
@@ -224,8 +216,8 @@ def test_fp8_quant_reads_tma_alignment_only_for_column_major_scales() -> None:
 def test_fp8_quant_serves_new_token_counts_from_one_kernel() -> None:
     op = FP8QuantPerTokenGroupFwdOp(128)
     for tokens in (3, 70):
-        test = FP8QuantTest((tokens, 256), 128, torch.bfloat16)
-        test.check(op, *test.gen_inputs())
+        workload = FP8QuantWorkload((tokens, 256), 128, torch.bfloat16)
+        check(workload, op, *workload.gen_inputs())
     assert len(list(op.iter_kernels())) == 1
 
 

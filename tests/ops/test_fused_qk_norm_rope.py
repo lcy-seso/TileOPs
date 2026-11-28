@@ -7,7 +7,7 @@ import torch
 from tests.compile_contract import assert_op_owns_graph_nodes, register_compile_contract
 from tests.cuda_graph_contract import check_replay
 from tests.misaligned import misaligned
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops.backend import OpNotAvailableError
 from tileops.manifest.primitives import stacked_positions
 from tileops.norm import FusedQKNormRoPEFwdOp
@@ -17,14 +17,6 @@ from workloads.norm import (
     fused_qk_norm_rope_result,
 )
 from workloads.numerics import compare_outputs
-
-
-class FusedQKNormRoPETest(FusedQKNormRoPEWorkload, TestBase):
-    """The workload as a test case: the reference and its policy come from the workload."""
-
-
-class FusedQKNormRoPEZeroCenteredOffsetTest(FusedQKNormRoPEZeroCenteredOffsetWorkload, TestBase):
-    pass
 
 
 def _packed(*lengths: int) -> list[int]:
@@ -115,7 +107,7 @@ def test_fused_qk_norm_rope(
     positions, heads, kv_heads, dim, rot, positions_max, dtype, cache_dtype, layout
 ) -> None:
     """The q and k heads hold the reference's result; the v heads are untouched."""
-    test = FusedQKNormRoPETest(
+    workload = FusedQKNormRoPEWorkload(
         positions,
         heads,
         kv_heads,
@@ -127,7 +119,12 @@ def test_fused_qk_norm_rope(
         layout,
     )
     op = FusedQKNormRoPEFwdOp(heads, kv_heads, rope_layout=layout)
-    test.check(op, *test.gen_inputs(), runs=lambda *args: fused_qk_norm_rope_result(op, *args))
+    check(
+        workload,
+        op,
+        *workload.gen_inputs(),
+        runs=lambda *args: fused_qk_norm_rope_result(op, *args),
+    )
 
 
 def _mrope(lengths, image, heads, kv_heads, dim, rot, dtype, cache, layout, centered, sections):
@@ -197,7 +194,7 @@ def test_fused_qk_norm_rope_mrope(
 ) -> None:
     """Each frequency rotates by the cache row of the temporal, height or width position its
     interleaved section names; image tokens carry three different positions."""
-    test = FusedQKNormRoPETest(
+    workload = FusedQKNormRoPEWorkload(
         positions,
         heads,
         kv_heads,
@@ -219,7 +216,12 @@ def test_fused_qk_norm_rope_mrope(
         mrope_section=sections,
         mrope_interleaved=True,
     )
-    test.check(op, *test.gen_inputs(), runs=lambda *args: fused_qk_norm_rope_result(op, *args))
+    check(
+        workload,
+        op,
+        *workload.gen_inputs(),
+        runs=lambda *args: fused_qk_norm_rope_result(op, *args),
+    )
 
 
 @pytest.mark.sm90
@@ -236,13 +238,13 @@ def test_fused_qk_norm_rope_graph_replay(positions_max) -> None:
     norms and interleaved multimodal RoPE (MRoPE) on part of each head. Every draw repeats its
     values, so the replay flips them and moves the position by one."""
     mrope = {"zero_centered": True, "mrope_section": [11, 11, 10], "mrope_interleaved": True}
-    test = FusedQKNormRoPETest(
+    workload = FusedQKNormRoPEWorkload(
         [[17]] * 3, 24, 4, 256, 64, positions_max, torch.bfloat16, torch.float32, **mrope
     )
-    qkv, q_weight, k_weight, cos_sin, positions = test.gen_inputs()
+    qkv, q_weight, k_weight, cos_sin, positions = workload.gen_inputs()
     inputs = (qkv.flip(-1), q_weight.flip(-1), k_weight.flip(-1), cos_sin.flip(0), positions + 1)
     op = FusedQKNormRoPEFwdOp(24, 4, **mrope)
-    check_replay(test, op, inputs, result=fused_qk_norm_rope_result)
+    check_replay(workload, op, inputs, result=fused_qk_norm_rope_result)
 
 
 @pytest.mark.parametrize(
@@ -256,11 +258,16 @@ def test_fused_qk_norm_rope_zero_centered_offset(positions, sections) -> None:
     """The zero-centered scale 1 + weight is formed in float32: rounded to bfloat16 first, it
     moves outputs these inputs hold exactly."""
     mrope = {"mrope_section": sections, "mrope_interleaved": sections is not None}
-    test = FusedQKNormRoPEZeroCenteredOffsetTest(
+    workload = FusedQKNormRoPEZeroCenteredOffsetWorkload(
         positions, 4, 2, 256, 64, 1, torch.bfloat16, torch.bfloat16, zero_centered=True, **mrope
     )
     op = FusedQKNormRoPEFwdOp(4, 2, zero_centered=True, **mrope)
-    test.check(op, *test.gen_inputs(), runs=lambda *args: fused_qk_norm_rope_result(op, *args))
+    check(
+        workload,
+        op,
+        *workload.gen_inputs(),
+        runs=lambda *args: fused_qk_norm_rope_result(op, *args),
+    )
 
 
 @pytest.mark.smoke
@@ -269,7 +276,7 @@ def test_fused_qk_norm_rope_refuses_consecutive_sections() -> None:
     """No in-tree kernel assigns frequencies to the three positions in consecutive sections:
     the op refuses such a call, naming the reason, before it builds a kernel."""
     arguments = {"mrope_section": [11, 11, 10]}
-    test = FusedQKNormRoPETest(
+    workload = FusedQKNormRoPEWorkload(
         stacked_positions((3,), [8], (2, 2)),
         2,
         1,
@@ -282,34 +289,36 @@ def test_fused_qk_norm_rope_refuses_consecutive_sections() -> None:
     )
     op = FusedQKNormRoPEFwdOp(2, 1, **arguments)
     with pytest.raises(OpNotAvailableError, match="mrope_interleaved"):
-        op(*test.gen_inputs())
+        op(*workload.gen_inputs())
     assert not op._entries_built("fused_qk_norm_rope")
 
 
 @pytest.mark.smoke
 def test_fused_qk_norm_rope_eps() -> None:
     """A row of zeros normalizes to zeros through eps, and eps is the one the op was built with."""
-    test = FusedQKNormRoPETest(
+    workload = FusedQKNormRoPEWorkload(
         _packed(3), 2, 1, 128, 128, 4, torch.bfloat16, torch.bfloat16, eps=1e-2
     )
-    qkv, *rest = test.gen_inputs()
+    qkv, *rest = workload.gen_inputs()
     qkv[:, :128] = 0
     qkv[:, 128:256] *= 0.05
     op = FusedQKNormRoPEFwdOp(2, 1, eps=1e-2)
-    test.check(op, qkv, *rest, runs=lambda *args: fused_qk_norm_rope_result(op, *args))
+    check(workload, op, qkv, *rest, runs=lambda *args: fused_qk_norm_rope_result(op, *args))
 
 
 @pytest.mark.smoke
 def test_fused_qk_norm_rope_unaligned_inputs() -> None:
     """Inputs whose storage starts off a 16-byte boundary give the same result, qkv in place."""
-    test = FusedQKNormRoPETest(_packed(5), 4, 2, 128, 128, 8, torch.bfloat16, torch.bfloat16)
-    inputs = test.gen_inputs()
-    expected = test.ref_program(*inputs)
+    workload = FusedQKNormRoPEWorkload(
+        _packed(5), 4, 2, 128, 128, 8, torch.bfloat16, torch.bfloat16
+    )
+    inputs = workload.gen_inputs()
+    expected = workload.ref_program(*inputs)
     qkv, q_weight, k_weight, cache = (misaligned(t) for t in inputs[:4])
 
     assert FusedQKNormRoPEFwdOp(4, 2)(qkv, q_weight, k_weight, cache, inputs[4]) is None
 
-    compare_outputs(qkv, expected, test.verification(*inputs))
+    compare_outputs(qkv, expected, workload.verification(*inputs))
 
 
 @pytest.mark.parametrize(
@@ -324,8 +333,8 @@ def test_fused_qk_norm_rope_unaligned_inputs() -> None:
 def test_fused_qk_norm_rope_refuses_an_invalid_tensor_contract(invalid) -> None:
     """Dtypes outside the signature, and a qkv it cannot write in place, are rejected before
     any kernel is chosen."""
-    test = FusedQKNormRoPETest(_packed(2), 2, 1, 64, 64, 4, torch.bfloat16, torch.bfloat16)
-    qkv, q_weight, k_weight, cache, positions = test.gen_inputs()
+    workload = FusedQKNormRoPEWorkload(_packed(2), 2, 1, 64, 64, 4, torch.bfloat16, torch.bfloat16)
+    qkv, q_weight, k_weight, cache, positions = workload.gen_inputs()
     if invalid == "qkv-float32":
         qkv = qkv.float()
     elif invalid == "weight-dtype":
@@ -344,11 +353,13 @@ def test_fused_qk_norm_rope_refuses_an_invalid_tensor_contract(invalid) -> None:
 @pytest.mark.usefixtures("isolated_dynamo")
 def test_fused_qk_norm_rope_compiles_cold_to_its_operator() -> None:
     """A cold fullgraph compile owns the graph and writes the same qkv as eager."""
-    test = FusedQKNormRoPETest(_packed(3, 2), 4, 2, 128, 64, 8, torch.bfloat16, torch.float32)
-    assert_op_owns_graph_nodes(FusedQKNormRoPEFwdOp(4, 2), *test.gen_inputs())
-    compiled_inputs = test.gen_inputs()
+    workload = FusedQKNormRoPEWorkload(
+        _packed(3, 2), 4, 2, 128, 64, 8, torch.bfloat16, torch.float32
+    )
+    assert_op_owns_graph_nodes(FusedQKNormRoPEFwdOp(4, 2), *workload.gen_inputs())
+    compiled_inputs = workload.gen_inputs()
     torch.compile(FusedQKNormRoPEFwdOp(4, 2), fullgraph=True)(*compiled_inputs)
-    eager_inputs = test.gen_inputs()
+    eager_inputs = workload.gen_inputs()
     FusedQKNormRoPEFwdOp(4, 2)(*eager_inputs)
     torch.testing.assert_close(compiled_inputs[0], eager_inputs[0], atol=0, rtol=0)
 

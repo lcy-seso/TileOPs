@@ -7,7 +7,7 @@ stream and the outputs belong to each call.
 import pytest
 import torch
 
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops._ops.elementwise import SiLUFwdOp
 from tileops.backend import BUILTIN
 from tileops.gemm import GEMMFwdOp
@@ -21,15 +21,7 @@ pytestmark = [pytest.mark.smoke, pytest.mark.in_tree_kernels]
 _N = 4096
 
 
-class _SiLUTest(UnaryActivationCase, TestBase):
-    pass
-
-
-class _GEMMTest(GEMMWorkload, TestBase):
-    pass
-
-
-_CASE = _SiLUTest(_N, torch.bfloat16, "SiLUFwdOp")
+_CASE = UnaryActivationCase(_N, torch.bfloat16, "SiLUFwdOp")
 
 
 def _warm_silu(*values: float) -> tuple:
@@ -79,8 +71,8 @@ def test_a_published_decomposition_serves_the_next_call_and_its_capture():
     """A configuration naming another decomposition is launched from its own programs on
     the next call, and a graph captured afterwards replays them. The decomposition,
     ``simple``, is one the SM90 GEMM kernel builds."""
-    test = _GEMMTest(256, 256, 512, torch.bfloat16, False, True)
-    a, b = test.gen_inputs()
+    workload = GEMMWorkload(256, 256, 512, torch.bfloat16, False, True)
+    a, b = workload.gen_inputs()
     op = GEMMFwdOp(trans_b=True, target=BUILTIN)
     op(a, b)
     (kernel,) = op.iter_kernels()
@@ -89,7 +81,7 @@ def test_a_published_decomposition_serves_the_next_call_and_its_capture():
     simple = {"simple": True, "block_m": 64, "block_n": 64, "block_k": 64, "num_stages": 2}
     kernel.config = {**kernel.config, **simple}
     published = kernel._generation
-    test.check(op, a, b)
+    check(workload, op, a, b)
     # The call compiled its launch into the published generation, from nothing held before.
     launched = set(map(id, published.programs.values()))
     assert launched and not launched & warm
@@ -100,4 +92,4 @@ def test_a_published_decomposition_serves_the_next_call_and_its_capture():
     a.copy_(torch.randn_like(a))
     graph.replay()
     torch.cuda.synchronize()
-    compare_outputs(y, test.ref_program(a, b), test.verification(a, b))
+    compare_outputs(y, workload.ref_program(a, b), workload.verification(a, b))

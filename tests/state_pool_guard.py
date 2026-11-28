@@ -2,7 +2,7 @@
 
 import torch
 
-from tests.workload_test_base import _by_signature
+from tests.workload_test_base import _by_signature, check
 from workloads.workload_base import manifest_call
 
 # Rows of random states on each side of the pool; slot -1 addresses the last row before it.
@@ -40,8 +40,8 @@ def check_padded_slots_skipped(op, inputs, pool_at: int, slots_at: int, padded: 
     torch.testing.assert_close(run(slots.masked_fill(mask, -1)), expected, rtol=0, atol=0)
 
 
-def pooled_call(op_name: str, test_cls: type, dtype: torch.dtype, *, some=(), **row):
-    """*test_cls* over a manifest call of *op_name* whose states live in a pool: sequence ``n``
+def pooled_call(op_name: str, workload_cls: type, dtype: torch.dtype, *, some=(), **row):
+    """*workload_cls* over a manifest call of *op_name* whose states live in a pool: sequence ``n``
     starts from slot ``state_indices[n]`` and leaves its final state there, every other slot
     untouched."""
     call = manifest_call(
@@ -50,13 +50,13 @@ def pooled_call(op_name: str, test_cls: type, dtype: torch.dtype, *, some=(), **
         some=["initial_state", "state_indices", *some],
         **row,
     )
-    return test_cls(call)
+    return workload_cls(call)
 
 
-def check_strided_pool_in_place(test, op) -> None:
-    """Run *op* on *test*'s inputs with the pool, input 5, as a strided view: the call must
+def check_strided_pool_in_place(workload, op) -> None:
+    """Run *op* on *workload*'s inputs with the pool, input 5, as a strided view: the call must
     advance that view and return it."""
-    q, k, v, g, beta, pool, *rest = test.gen_inputs()
+    q, k, v, g, beta, pool, *rest = workload.gen_inputs()
     strided = torch.empty((2 * pool.shape[0], *pool.shape[1:]), device=pool.device)[::2]
     strided.copy_(pool)
 
@@ -66,4 +66,4 @@ def check_strided_pool_in_place(test, op) -> None:
         assert final_state is args[5]
         return o, final_state
 
-    test.check(op, q, k, v, g, beta, strided, *rest, runs=run)
+    check(workload, op, q, k, v, g, beta, strided, *rest, runs=run)

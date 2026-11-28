@@ -5,7 +5,7 @@ import torch
 
 import tileops._ops.elementwise as elementwise_mod
 from tests.compile_contract import assert_op_owns_graph_nodes, register_compile_contract
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._ops.elementwise import (
     AbsFwdOp,
     AddFwdOp,
@@ -95,18 +95,14 @@ def _register_table(table):
 # Unary compile test: relu
 
 
-class ReLUCompileTest(ReLUWorkload, TestBase):
-    pass
-
-
 register_compile_contract(ReLUFwdOp)
 
 
 @pytest.mark.smoke
 def test_relu_compile():
-    test = ReLUCompileTest(1_048_576, torch.float16)
+    workload = ReLUWorkload(1_048_576, torch.float16)
     op = ReLUFwdOp()
-    test.check(op, *test.gen_inputs(), runs=torch.compile(op, fullgraph=True))
+    check(workload, op, *workload.gen_inputs(), runs=torch.compile(op, fullgraph=True))
 
 
 # Binary compile test: add
@@ -124,25 +120,17 @@ class AddCompileFixture(FixtureBase):
     ]
 
 
-class AddCompileTest(AddBroadcastWorkload, TestBase):
-    pass
-
-
 register_compile_contract(AddFwdOp)
 
 
 @AddCompileFixture
 def test_add_compile(a_shape, b_shape, dtype):
-    test = AddCompileTest(a_shape, b_shape, dtype)
+    workload = AddBroadcastWorkload(a_shape, b_shape, dtype)
     op = AddFwdOp()
-    test.check(op, *test.gen_inputs(), runs=torch.compile(op, fullgraph=True))
+    check(workload, op, *workload.gen_inputs(), runs=torch.compile(op, fullgraph=True))
 
 
 # Comparison compile test: eq (bool output)
-
-
-class EqCompileTest(EqCompileWorkload, TestBase):
-    pass
 
 
 register_compile_contract(EqFwdOp)
@@ -150,16 +138,12 @@ register_compile_contract(EqFwdOp)
 
 @pytest.mark.smoke
 def test_eq_compile():
-    test = EqCompileTest((1024, 1024), (1024, 1024), torch.float16)
+    workload = EqCompileWorkload((1024, 1024), (1024, 1024), torch.float16)
     op = EqFwdOp()
-    test.check(op, *test.gen_inputs(), runs=torch.compile(op, fullgraph=True))
+    check(workload, op, *workload.gen_inputs(), runs=torch.compile(op, fullgraph=True))
 
 
 # FusedGated compile test: silu_and_mul
-
-
-class SiLUAndMulCompileTest(SiLUAndMulCase, TestBase):
-    pass
 
 
 register_compile_contract(SiLUAndMulFwdOp)
@@ -167,16 +151,12 @@ register_compile_contract(SiLUAndMulFwdOp)
 
 @pytest.mark.smoke
 def test_silu_and_mul_compile():
-    test = SiLUAndMulCompileTest(512, 1024, torch.float16)
+    workload = SiLUAndMulCase(512, 1024, torch.float16)
     op = SiLUAndMulFwdOp()
-    test.check(op, *test.gen_inputs(), runs=torch.compile(op, fullgraph=True))
+    check(workload, op, *workload.gen_inputs(), runs=torch.compile(op, fullgraph=True))
 
 
 # Additional unary compile tests: abs, sign
-
-
-class AbsCompileTest(AbsCompileCase, TestBase):
-    pass
 
 
 register_compile_contract(AbsFwdOp)
@@ -184,13 +164,9 @@ register_compile_contract(AbsFwdOp)
 
 @pytest.mark.smoke
 def test_abs_compile():
-    test = AbsCompileTest(1_048_576, torch.float16)
+    workload = AbsCompileCase(1_048_576, torch.float16)
     op = AbsFwdOp()
-    test.check(op, *test.gen_inputs(), runs=torch.compile(op, fullgraph=True))
-
-
-class SignCompileTest(SignCompileCase, TestBase):
-    pass
+    check(workload, op, *workload.gen_inputs(), runs=torch.compile(op, fullgraph=True))
 
 
 register_compile_contract(SignFwdOp)
@@ -198,9 +174,9 @@ register_compile_contract(SignFwdOp)
 
 @pytest.mark.smoke
 def test_sign_compile():
-    test = SignCompileTest(1_048_576, torch.float16)
+    workload = SignCompileCase(1_048_576, torch.float16)
     op = SignFwdOp()
-    test.check(op, *test.gen_inputs(), runs=torch.compile(op, fullgraph=True))
+    check(workload, op, *workload.gen_inputs(), runs=torch.compile(op, fullgraph=True))
 
 
 # Every registered op compiles: custom_op registration, register_fake and codegen succeed.
@@ -258,7 +234,7 @@ def test_unary_float_compile(op_cls, input_fn, name):
     )
 
     workload = ElementwiseWorkload(type(op).__name__, (x,))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 # --- Unary bool-output ops ---
@@ -287,7 +263,7 @@ def test_unary_bool_compile(op_cls, dtype, name):
         x = torch.randn(n, dtype=dtype, device=run_device())
 
     workload = ElementwiseWorkload(type(op).__name__, (x,))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 # --- Unary bitwise op ---
@@ -304,7 +280,7 @@ def test_bitwise_not_compile():
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (x_int,))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 # --- Remaining binary same-dtype ops ---
@@ -333,7 +309,7 @@ def test_binary_arith_compile(op_cls, name):
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (a, b))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 register_compile_contract(PowFwdOp)
@@ -349,7 +325,7 @@ def test_pow_compile():
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (a, b))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 # --- Lerp (Number or Tensor weight) ---
@@ -367,7 +343,7 @@ def test_lerp_compile():
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (a, b, 0.3))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 @pytest.mark.smoke
@@ -381,7 +357,7 @@ def test_lerp_tensor_compile():
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (a, b, w))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 # --- Remaining comparison ops ---
@@ -408,7 +384,7 @@ def test_comparison_compile(op_cls, name):
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (a, b))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 # --- Logical binary ops ---
@@ -432,7 +408,7 @@ def test_logical_binary_compile(op_cls, name):
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (a, b))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 # --- Bitwise binary ops ---
@@ -457,7 +433,7 @@ def test_bitwise_binary_compile(op_cls, name):
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (a, b))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 @pytest.mark.parametrize("op_cls, name", _BITWISE_BINARY_OPS)
@@ -470,7 +446,7 @@ def test_bool_bitwise_binary_compile(op_cls, name):
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (a, b))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 # --- Remaining fused gated ops ---
@@ -493,7 +469,7 @@ def test_fused_gated_compile(op_cls, approximate):
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (x,), approximate=approximate)
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 # --- Where op (cond, x, y -> out): same-shape and broadcasting ---
@@ -514,7 +490,7 @@ def test_where_compile_broadcast():
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (cond, x, y))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 # --- ClampFwdOp (input, min?, max? -> out) ---
@@ -531,7 +507,7 @@ def test_clamp_number_bounds_compile():
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (x, -0.5, 0.5))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 @pytest.mark.smoke
@@ -547,7 +523,7 @@ def test_clamp_tensor_compile_broadcast():
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (x, lo, hi))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 # --- One bound withheld ---
@@ -564,7 +540,7 @@ def test_clamp_min_only_compile_broadcast():
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (x, lo))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 @pytest.mark.smoke
@@ -578,7 +554,7 @@ def test_clamp_max_only_compile_broadcast():
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (x, None, hi))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 # --- MaskedFillFwdOp (Tensor or Number value) ---
@@ -598,7 +574,7 @@ def test_masked_fill_tensor_compile_broadcast():
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (x, mask, value))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 @pytest.mark.smoke
@@ -612,7 +588,7 @@ def test_masked_fill_scalar_compile_broadcast():
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (x, mask, -1.0))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 # --- DivFwdOp rounding modes ---
@@ -631,7 +607,7 @@ def test_div_rounding_mode_compile(rounding_mode: str) -> None:
     compiled_op = torch.compile(op, fullgraph=True)
 
     workload = ElementwiseWorkload(type(op).__name__, (a, b), rounding_mode=rounding_mode)
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=compiled_op)
+    check(workload, op, *workload.gen_inputs(), runs=compiled_op)
 
 
 @pytest.mark.smoke
@@ -648,7 +624,7 @@ def test_reciprocal_int_promotion_compiles():
     assert compiled.dtype == eager.dtype
     assert torch.equal(compiled, eager)
     workload = ElementwiseWorkload(type(op).__name__, (x,))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=torch.compile(op, fullgraph=True))
+    check(workload, op, *workload.gen_inputs(), runs=torch.compile(op, fullgraph=True))
 
 
 @pytest.mark.smoke
@@ -703,7 +679,7 @@ def test_parametric_unary_compile(op_name, kwargs):
     x = torch.randn(n, dtype=_DTYPE, device=run_device())
 
     workload = ElementwiseWorkload(type(op).__name__, (x,), **kwargs)
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=torch.compile(op, fullgraph=True))
+    check(workload, op, *workload.gen_inputs(), runs=torch.compile(op, fullgraph=True))
 
 
 for _case in _PARAMETRIC_OPS:
@@ -722,7 +698,7 @@ def test_prelu_compile():
 
     op = PReLUFwdOp()
     workload = ElementwiseWorkload(type(op).__name__, (x, weight))
-    TestBase.check(workload, op, *workload.gen_inputs(), runs=torch.compile(op, fullgraph=True))
+    check(workload, op, *workload.gen_inputs(), runs=torch.compile(op, fullgraph=True))
 
 
 register_compile_contract(DropoutFwdOp)

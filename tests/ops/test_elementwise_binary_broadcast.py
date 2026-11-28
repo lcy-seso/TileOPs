@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import tileops._ops.elementwise as elementwise_mod
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from workloads.device import run_device, run_device_available
 from workloads.elementwise import ElementwiseWorkload
 
@@ -79,7 +79,7 @@ def test_binary_op_bidirectional_broadcast(
     """Bidirectional broadcast: (3,1) x (1,4) -> (3,4)."""
     a = gen_a((3, 1), dtype)
     b = gen_b((1, 4), dtype)
-    TestBase.check(ElementwiseWorkload(op_name, (a, b)), getattr(elementwise_mod, op_name)(), a, b)
+    check(ElementwiseWorkload(op_name, (a, b)), getattr(elementwise_mod, op_name)(), a, b)
 
 
 @pytest.mark.smoke
@@ -92,7 +92,7 @@ def test_channel_broadcast_with_ragged_inner_dim(op_name: str) -> None:
     """
     a = torch.randn(2, 3, 10, 30, dtype=torch.float16, device=run_device())
     b = torch.rand(3, 1, 1, dtype=torch.float16, device=run_device()) + 0.5
-    TestBase.check(ElementwiseWorkload(op_name, (a, b)), getattr(elementwise_mod, op_name)(), a, b)
+    check(ElementwiseWorkload(op_name, (a, b)), getattr(elementwise_mod, op_name)(), a, b)
 
 
 # Rows that are not a whole number of a thread's vectors, against a full operand; each
@@ -157,7 +157,7 @@ def test_ragged_rows_match_torch(op_name, a_shape, b_shape, dtype) -> None:
     a.view(-1)[-3:] = specials
     b.view(-1)[-3:] = specials
     workload = ElementwiseWorkload(op_name, (a, b))
-    TestBase.check(workload, getattr(elementwise_mod, op_name)(), a, b)
+    check(workload, getattr(elementwise_mod, op_name)(), a, b)
 
 
 # Staged row blocks short enough for two 16-byte float32 vectors a thread, with the
@@ -190,7 +190,7 @@ def test_two_vector_row_blocks_match_torch(op_name, kwargs, a_shape, b_shape) ->
     a.view(-1)[::37] = float("nan") if op_name == "MaximumFwdOp" else 0.0
     b.view(-1)[::29] = float("nan") if op_name == "MaximumFwdOp" else 0.0
     workload = ElementwiseWorkload(op_name, (a, b), **kwargs)
-    TestBase.check(workload, getattr(elementwise_mod, op_name)(**kwargs), a, b)
+    check(workload, getattr(elementwise_mod, op_name)(**kwargs), a, b)
 
 
 _STAGED_SHAPES = [
@@ -231,7 +231,7 @@ def test_staged_row_broadcast_matches_torch(a_shape, b_shape, dtype):
     """A staged predicate broadcast agrees with torch on every stride pair."""
     a = torch.randn(a_shape, device=run_device(), dtype=dtype)
     b = torch.randn(b_shape, device=run_device(), dtype=dtype)
-    TestBase.check(ElementwiseWorkload("GtFwdOp", (a, b)), elementwise_mod.GtFwdOp(), a, b)
+    check(ElementwiseWorkload("GtFwdOp", (a, b)), elementwise_mod.GtFwdOp(), a, b)
 
 
 _TAIL_SHAPES = [
@@ -247,7 +247,7 @@ def test_row_broadcast_tail_matches_torch(a_shape, b_shape):
     a = torch.randn(a_shape, device=run_device(), dtype=torch.float32)
     b = torch.randn(b_shape, device=run_device(), dtype=torch.float32)
     workload = ElementwiseWorkload("AddFwdOp", (a, b))
-    TestBase.check(workload, elementwise_mod.AddFwdOp(), a, b)
+    check(workload, elementwise_mod.AddFwdOp(), a, b)
 
 
 def _with_nans(a_shape, b_shape, dtype):
@@ -277,7 +277,7 @@ def test_bias_row_grid_matches_torch(op_name, a_shape, b_shape, dtype):
     eight lanes a vector, and its NaNs in both operands reach the maximum body's NaN test.
     """
     a, b = _with_nans(a_shape, b_shape, dtype)
-    TestBase.check(ElementwiseWorkload(op_name, (a, b)), getattr(elementwise_mod, op_name)(), a, b)
+    check(ElementwiseWorkload(op_name, (a, b)), getattr(elementwise_mod, op_name)(), a, b)
 
 
 _ROUNDS_CASES = [
@@ -327,7 +327,7 @@ def test_row_broadcast_rounds_match_torch(op_name, a_shape, b_shape, dtype):
     full[..., 5::13] = bias[..., 5::13]
     bias[..., 7::17] = 0.0
     full[..., 7::17] = -0.0
-    TestBase.check(ElementwiseWorkload(op_name, (a, b)), getattr(elementwise_mod, op_name)(), a, b)
+    check(ElementwiseWorkload(op_name, (a, b)), getattr(elementwise_mod, op_name)(), a, b)
 
 
 # Each op on one of the two 16-bit dtypes, alternating, so both pair types run.
@@ -363,4 +363,4 @@ def test_row_broadcast_bool_lanes_match_torch(op_name, dtype, a_held):
     full[..., 11::23] = float("inf")
     full[..., 12::29] = float("-inf")
     a, b = (bias, full) if a_held else (full, bias)
-    TestBase.check(ElementwiseWorkload(op_name, (a, b)), getattr(elementwise_mod, op_name)(), a, b)
+    check(ElementwiseWorkload(op_name, (a, b)), getattr(elementwise_mod, op_name)(), a, b)

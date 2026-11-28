@@ -3,18 +3,13 @@ import math
 import pytest
 import torch
 
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops._kernels.constants import MAX_GRID_YZ_BLOCKS
 from tileops._kernels.indexing import MaskedScatterCall, mask_runs
 from tileops.indexing import MaskedScatterFwdOp
 from workloads.device import run_device
 from workloads.indexing import MaskedScatterWorkload
 from workloads.workload_base import manifest_call
-
-
-class MaskedScatterTest(MaskedScatterWorkload, TestBase):
-    pass
-
 
 _SMOKE = pytest.mark.smoke
 _FULL = pytest.mark.full
@@ -76,8 +71,8 @@ def test_masked_scatter(A, M, R, dtype, request) -> None:
         )
         cfg = op.kernel_for("masked_scatter", lambda: spec).config
         assert on_path(cfg, math.prod(A[:lead]), run_len, spec.dtype.itemsize), cfg
-    test = MaskedScatterTest(call)
-    test.check(op, *test.gen_inputs())
+    workload = MaskedScatterWorkload(call)
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -89,6 +84,6 @@ def test_masked_scatter_counts_nonzero_mask_bytes() -> None:
     call = manifest_call(
         "MaskedScatterFwdOp", {"T": "float32"}, A=[40, 4096], M=[40, 1], R=[30, 4096]
     )
-    test = MaskedScatterTest(call)
-    input, _, source = test.gen_inputs()
-    test.check(MaskedScatterFwdOp(), input, bytes_.view(torch.bool).view(40, 1), source)
+    workload = MaskedScatterWorkload(call)
+    input, _, source = workload.gen_inputs()
+    check(workload, MaskedScatterFwdOp(), input, bytes_.view(torch.bool).view(40, 1), source)

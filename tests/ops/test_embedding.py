@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from tests.cuda_graph_contract import check_replay
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops._kernels.constants import SM_RESIDENT_BLOCKS
 from tileops._kernels.indexing import EmbeddingCall
 from tileops.backend import OpNotAvailableError
@@ -12,12 +12,8 @@ from workloads.indexing import EmbeddingWorkload
 from workloads.workload_base import manifest_call
 
 
-class EmbeddingTest(EmbeddingWorkload, TestBase):
-    pass
-
-
-def _test(S, V, D, index_dtype, dtype, **params) -> EmbeddingTest:
-    return EmbeddingTest(
+def _workload(S, V, D, index_dtype, dtype, **params) -> EmbeddingWorkload:
+    return EmbeddingWorkload(
         manifest_call("EmbeddingFwdOp", {"I": index_dtype, "T": dtype}, S=S, V=V, D=D, **params)
     )
 
@@ -86,8 +82,8 @@ _ON_PATH = {
 
 @pytest.mark.parametrize("S, V, D, index_dtype, dtype, params", _CASES)
 def test_embedding(S, V, D, index_dtype, dtype, params, request) -> None:
-    test = _test(S, V, D, index_dtype, dtype, **params)
-    op = EmbeddingFwdOp(**test.arguments())
+    workload = _workload(S, V, D, index_dtype, dtype, **params)
+    op = EmbeddingFwdOp(**workload.arguments())
     on_path = _ON_PATH.get(request.node.callspec.id)
     if on_path is not None:
         call = EmbeddingCall(
@@ -98,7 +94,7 @@ def test_embedding(S, V, D, index_dtype, dtype, params, request) -> None:
         )
         cfg = op.kernel_for("embedding", lambda: call).config
         assert on_path(cfg, S, D), cfg
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.sm90
@@ -114,9 +110,9 @@ def test_embedding(S, V, D, index_dtype, dtype, params, request) -> None:
 def test_embedding_graph_replay(S, V, D, T) -> None:
     """One decode token's int64 id looked up in a table. Every draw names the table's last row,
     so the replay reads the row before it."""
-    test = _test(S, V, D, "int64", T)
-    ids, table = test.gen_inputs()
-    check_replay(test, EmbeddingFwdOp(**test.arguments()), (ids - 1, table))
+    workload = _workload(S, V, D, "int64", T)
+    ids, table = workload.gen_inputs()
+    check_replay(workload, EmbeddingFwdOp(**workload.arguments()), (ids - 1, table))
 
 
 @pytest.mark.smoke
@@ -175,8 +171,8 @@ def test_embedding_launches_by_id_count(D, monkeypatch) -> None:
     launched = _record_launches(kernel, monkeypatch)
     for tokens, facts in launches:
         launched.clear()
-        test = _test([tokens], 50, D, "int64", "bfloat16")
-        test.check(op, *test.gen_inputs())
+        workload = _workload([tokens], 50, D, "int64", "bfloat16")
+        check(workload, op, *workload.gen_inputs())
         assert launched[-1] == facts, (tokens, launched)
     for launch_threads, min_blocks in {facts for _, facts in launches}:
         source = kernel.program(kernel._compile, launch_threads, min_blocks).get_kernel_source()
@@ -258,19 +254,19 @@ def test_embedding_has_no_one_wave_program(D) -> None:
 @pytest.mark.smoke
 def test_embedding_strided_inputs() -> None:
     """Every second element of a wider id tensor and of a wider table."""
-    test = _test([4, 33], 1000, 2048, "int64", "bfloat16")
-    input, weight = test.gen_inputs()
+    workload = _workload([4, 33], 1000, 2048, "int64", "bfloat16")
+    input, weight = workload.gen_inputs()
     wide_input = torch.zeros(4, 66, dtype=input.dtype, device=run_device())
     wide_input[:, ::2] = input
     wide_weight = torch.zeros(1000, 4096, dtype=weight.dtype, device=run_device())
     wide_weight[:, ::2] = weight
-    test.check(EmbeddingFwdOp(), wide_input[:, ::2], wide_weight[:, ::2])
+    check(workload, EmbeddingFwdOp(), wide_input[:, ::2], wide_weight[:, ::2])
 
 
 @pytest.mark.smoke
 @pytest.mark.parametrize("bad", [-1, 1000], ids=["negative", "past-end"])
 def test_embedding_validate_inputs_rejects_out_of_range_ids(bad: int) -> None:
-    input, weight = _test([4, 33], 1000, 2048, "int64", "bfloat16").gen_inputs()
+    input, weight = _workload([4, 33], 1000, 2048, "int64", "bfloat16").gen_inputs()
     input[1, 3] = bad
     with pytest.raises(ValueError, match="input"):
         EmbeddingFwdOp(validate_inputs=True)(input, weight)
@@ -278,7 +274,7 @@ def test_embedding_validate_inputs_rejects_out_of_range_ids(bad: int) -> None:
 
 @pytest.mark.smoke
 def test_embedding_rejects_float_ids() -> None:
-    input, weight = _test([4, 33], 1000, 2048, "int64", "bfloat16").gen_inputs()
+    input, weight = _workload([4, 33], 1000, 2048, "int64", "bfloat16").gen_inputs()
     with pytest.raises(ValueError, match="dtype is outside"):
         EmbeddingFwdOp()(input.float(), weight)
 
@@ -287,7 +283,7 @@ def test_embedding_rejects_float_ids() -> None:
 @pytest.mark.in_tree_kernels
 def test_embedding_refuses_max_norm() -> None:
     """No in-tree kernel renormalizes the table in place; the op refuses before building."""
-    input, weight = _test([129], 300, 1152, "int64", "float32").gen_inputs()
+    input, weight = _workload([129], 300, 1152, "int64", "float32").gen_inputs()
     before = weight.clone()
     op = EmbeddingFwdOp(max_norm=1.0)
     with pytest.raises(OpNotAvailableError, match="max_norm"):

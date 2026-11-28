@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from tests.cuda_graph_contract import check_replay
 from tests.launch_bounds import elementwise_launch_bounds, full_occupancy_bounds
 from tests.misaligned import misaligned
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._kernels.elementwise import UnaryKernel
 from tileops._ops.elementwise import (
     ELUFwdOp,
@@ -39,10 +39,6 @@ from workloads.elementwise import (
 from workloads.numerics import compare_outputs
 
 
-class ReLUTest(ReLUWorkload, TestBase):
-    pass
-
-
 class ReLUFixture(FixtureBase):
     PARAMS = [
         (
@@ -62,9 +58,9 @@ class ReLUFixture(FixtureBase):
 
 @ReLUFixture
 def test_relu_op(n_total: int, dtype: torch.dtype) -> None:
-    test = ReLUTest(n_total, dtype)
+    workload = ReLUWorkload(n_total, dtype)
     op = ReLUFwdOp()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -85,7 +81,7 @@ def test_matches_torch_bit_for_bit_at_every_16bit_input(op_name: str, dtype: tor
     import tileops._ops.elementwise as ops
 
     workload = Exhaustive16BitWorkload(op_name, dtype)
-    TestBase.check(workload, getattr(ops, op_name)(), *workload.gen_inputs())
+    check(workload, getattr(ops, op_name)(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -135,8 +131,8 @@ def _launch_size(launch: str, dtype: torch.dtype) -> int:
 )
 def test_relu_launch_sizes(launch: str, dtype: torch.dtype) -> None:
     """ReLU remains correct across block-size, alignment and cache-size boundaries."""
-    test = ReLUTest(_launch_size(launch, dtype), dtype)
-    test.check(ReLUFwdOp(), *test.gen_inputs())
+    workload = ReLUWorkload(_launch_size(launch, dtype), dtype)
+    check(workload, ReLUFwdOp(), *workload.gen_inputs())
 
 
 class ActivationFixture(FixtureBase):
@@ -163,18 +159,14 @@ class ActivationEdgeFixture(FixtureBase):
     ]
 
 
-class UnaryActivationTest(UnaryActivationCase, TestBase):
-    pass
-
-
 def _randn(n: int, dtype: torch.dtype) -> torch.Tensor:
     return torch.randn(n, device=run_device(), dtype=dtype)
 
 
 def _make_activation_test(n_total, dtype, gen_fn, op_cls, **op_kwargs):
-    test = UnaryActivationTest(n_total, dtype, op_cls.__name__, gen_fn=gen_fn, **op_kwargs)
+    workload = UnaryActivationCase(n_total, dtype, op_cls.__name__, gen_fn=gen_fn, **op_kwargs)
     op = op_cls(**op_kwargs)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -219,7 +211,7 @@ def test_gelu_keeps_an_sm_of_threads_resident(approximate: str) -> None:
 def test_float16_silu_every_input() -> None:
     """Every float16 input, -65504 included, where the divisor overflows to infinity."""
     workload = Every16BitCase(torch.float16, "SiLUFwdOp")
-    TestBase.check(workload, SiLUFwdOp(), *workload.gen_inputs())
+    check(workload, SiLUFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -244,7 +236,7 @@ def test_float32_tanh_leaves_the_register_budget_to_nvcc() -> None:
 def test_sigmoid_edge(n_total: int, dtype: torch.dtype) -> None:
     """Infinities, NaN, signed zeros, subnormals and a divisor past ``2**126``."""
     workload = SigmoidEdgeWorkload(n_total, dtype)
-    TestBase.check(workload, SigmoidFwdOp(), *workload.gen_inputs())
+    check(workload, SigmoidFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -258,9 +250,9 @@ def test_sigmoid_partial_last_block() -> None:
 @pytest.mark.smoke
 def test_sigmoid_input_off_a_vector_boundary() -> None:
     """A contiguous input starting one element past a 16-byte boundary matches the reference."""
-    test = UnaryActivationTest(4096, torch.float32, "SigmoidFwdOp", gen_fn=_randn)
-    (aligned,) = test.gen_inputs()
-    test.check(SigmoidFwdOp(), misaligned(aligned))
+    workload = UnaryActivationCase(4096, torch.float32, "SigmoidFwdOp", gen_fn=_randn)
+    (aligned,) = workload.gen_inputs()
+    check(workload, SigmoidFwdOp(), misaligned(aligned))
 
 
 @pytest.mark.smoke
@@ -274,10 +266,10 @@ def test_float32_sigmoid_past_l2() -> None:
 @pytest.mark.smoke
 def test_sigmoid_tuned() -> None:
     """Tuned mode picks a launch whose result matches the reference."""
-    test = UnaryActivationTest(2**18 + 4, torch.float32, "SigmoidFwdOp", gen_fn=_randn)
+    workload = UnaryActivationCase(2**18 + 4, torch.float32, "SigmoidFwdOp", gen_fn=_randn)
     op = SigmoidFwdOp()
     op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.sm90
@@ -307,7 +299,7 @@ def test_sigmoid_tuned() -> None:
 def test_activation_graph_replay(op_type, n_total: int) -> None:
     """A bfloat16 activation of one decode token: DeepSeek-V4-Flash's indexer scores rectified,
     Qwen3.8-27B's attention gate."""
-    check_replay(UnaryActivationTest(n_total, torch.bfloat16, op_type.__name__), op_type())
+    check_replay(UnaryActivationCase(n_total, torch.bfloat16, op_type.__name__), op_type())
 
 
 @ActivationEdgeFixture
@@ -328,7 +320,7 @@ def test_tanh_edge(n_total: int, dtype: torch.dtype) -> None:
 def test_gelu_tails_are_exact(dtype: torch.dtype) -> None:
     """GELU reaches exactly 0 below its tail and exactly x above it, infinities included."""
     workload = GELUTailWorkload(dtype)
-    TestBase.check(workload, GELUFwdOp(), *workload.gen_inputs())
+    check(workload, GELUFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -336,7 +328,7 @@ def test_gelu_tails_are_exact(dtype: torch.dtype) -> None:
 def test_gelu_keeps_negative_inputs_nonpositive(dtype: torch.dtype) -> None:
     """GELU of a negative input is never positive, at every 16-bit input."""
     workload = GELUSignWorkload(dtype)
-    TestBase.check(workload, GELUFwdOp(), *workload.gen_inputs())
+    check(workload, GELUFwdOp(), *workload.gen_inputs())
 
 
 class PReLUFixture(FixtureBase):
@@ -405,11 +397,11 @@ def test_prelu_rejects_a_weight_that_does_not_match_the_channel_axis() -> None:
 )
 def test_gelu_short_row(tune: bool) -> None:
     """A row the grid-filling shrink reaches: two elements a thread, across a block and its tail."""
-    test = UnaryActivationTest(257, torch.float32, "GELUFwdOp", gen_fn=_randn)
+    workload = UnaryActivationCase(257, torch.float32, "GELUFwdOp", gen_fn=_randn)
     op = GELUFwdOp()
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -417,8 +409,8 @@ def test_gelu_short_row(tune: bool) -> None:
     [pytest.param(False, marks=pytest.mark.smoke), pytest.param(True, marks=pytest.mark.full)],
 )
 def test_leaky_relu_under_tuning(tune: bool) -> None:
-    test = UnaryActivationTest(4096 * 7 + 13, torch.float16, "LeakyReLUFwdOp", gen_fn=_randn)
+    workload = UnaryActivationCase(4096 * 7 + 13, torch.float16, "LeakyReLUFwdOp", gen_fn=_randn)
     op = LeakyReLUFwdOp()
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())

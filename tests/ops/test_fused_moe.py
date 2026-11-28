@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._ops.moe import (
     FusedMoEFwdOp,
     FusedTopKFwdOp,
@@ -133,7 +133,7 @@ def test_fused_moe_qwen3(
     )
     inputs = workload.gen_inputs()
     op = FusedMoEFwdOp(**workload.arguments())
-    TestBase.check(workload, op, *inputs)
+    check(workload, op, *inputs)
 
     hidden, gating, w_gate_up, w_down, *_ = inputs
     # vLLM's fp32 Triton tiles take up to 128 KB of shared memory, over SM86/SM89's 99 KB.
@@ -182,7 +182,7 @@ def test_fused_moe_deterministic(case):
     workload = _workload(*case["shape"])
     inputs = workload.gen_inputs()
     op = FusedMoEFwdOp(**workload.arguments())
-    TestBase.check(workload, op, *inputs)
+    check(workload, op, *inputs)
     first = op(*inputs)
     for i in range(reps):
         assert torch.equal(op(*inputs), first), f"call {i + 1}/{reps} differs from the first"
@@ -206,7 +206,7 @@ def test_fused_moe_gpt_oss_swigluoai_and_expert_biases() -> None:
         some=["b_gate_up", "b_down"],
     )
     workload = FusedMoEWorkload(call)
-    TestBase.check(workload, FusedMoEFwdOp(**call.arguments()), *workload.gen_inputs())
+    check(workload, FusedMoEFwdOp(**call.arguments()), *workload.gen_inputs())
 
 
 class KimiFixture(FixtureBase):
@@ -303,7 +303,7 @@ def test_fused_moe_kimi(
         routed_scaling_factor=routed_scaling_factor,
         some=["correction_bias"] if with_correction_bias else [],
     )
-    TestBase.check(workload, FusedMoEFwdOp(**workload.arguments()), *workload.gen_inputs())
+    check(workload, FusedMoEFwdOp(**workload.arguments()), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -326,7 +326,7 @@ def test_grouped_routing_scales_the_output_once() -> None:
     )
     workload = FusedMoEWorkload(call)
     op = FusedMoEFwdOp(**call.arguments())
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 class VllmFixture(FixtureBase):

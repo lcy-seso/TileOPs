@@ -9,7 +9,7 @@ import torch
 import torch.nn.functional as F
 from tilelang.jit.kernel import JITKernel
 
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops._kernels.kernel_base import CompiledProgram
 from tileops._kernels.reduction.call_spec import SoftmaxCall
 from tileops._kernels.reduction.softmax_on_chip import SoftmaxClusterSplitKernel
@@ -29,19 +29,7 @@ _OPS = {"softmax": SoftmaxFwdOp, "log_softmax": LogSoftmaxFwdOp, "logsumexp": Lo
 _CASES = {"softmax": SoftmaxCase, "log_softmax": LogSoftmaxCase, "logsumexp": LogSumExpCase}
 
 
-class SoftmaxTest(SoftmaxCase, TestBase):
-    pass
-
-
-class LogSoftmaxTest(LogSoftmaxCase, TestBase):
-    pass
-
-
-class LogSumExpTest(LogSumExpCase, TestBase):
-    pass
-
-
-_TESTS = {"softmax": SoftmaxTest, "log_softmax": LogSoftmaxTest, "logsumexp": LogSumExpTest}
+_WORKLOADS = {"softmax": SoftmaxCase, "log_softmax": LogSoftmaxCase, "logsumexp": LogSumExpCase}
 
 
 def _check(op_kind: str, x: torch.Tensor, dim, keepdim: bool = False) -> None:
@@ -102,11 +90,11 @@ def _op_cases() -> list:
 def test_softmax_family_op(
     op_kind: str, shape: tuple, dim: int, dtype: torch.dtype, tune: bool
 ) -> None:
-    test = _TESTS[op_kind](shape, dtype, dim=dim)
+    workload = _WORKLOADS[op_kind](shape, dtype, dim=dim)
     op = _OPS[op_kind](dim=dim)
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -119,11 +107,11 @@ def test_softmax_family_op(
 )
 def test_logsumexp_tuned(shape: tuple, tune: bool) -> None:
     """Separate from the family test: conftest allows one full tune=True case per function."""
-    test = LogSumExpTest(shape, torch.float16, dim=-1)
+    workload = LogSumExpCase(shape, torch.float16, dim=-1)
     op = LogSumExpFwdOp(dim=-1)
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -731,9 +719,9 @@ def _run_and_capture(monkeypatch, shape, dtype, kernel) -> list:
     """The CUDA sources of the programs Softmax runs on *shape*, which must be *kernel*'s;
     the output is checked against the reference."""
     sources = _launched_sources(monkeypatch)
-    test = SoftmaxTest(shape, dtype)
+    workload = SoftmaxCase(shape, dtype)
     op = SoftmaxFwdOp(dim=-1)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     assert [type(k).__name__ for k in op.iter_kernels()] == [kernel]
     assert sources
     return sources

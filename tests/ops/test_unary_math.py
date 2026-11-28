@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from tests.launch_bounds import elementwise_launch_bounds, full_occupancy_bounds
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._ops.elementwise import (
     AbsFwdOp,
     CeilFwdOp,
@@ -52,10 +52,6 @@ class MathFixture(FixtureBase):
     ]
 
 
-class UnaryMathTest(UnaryActivationCase, TestBase):
-    pass
-
-
 def _randn(n: int, dtype: torch.dtype) -> torch.Tensor:
     return torch.randn(n, device=run_device(), dtype=dtype)
 
@@ -80,9 +76,9 @@ def _log1p_input(n: int, dtype: torch.dtype) -> torch.Tensor:
 
 
 def _make_math_test(n_total, dtype, gen_fn, op_cls):
-    test = UnaryMathTest(n_total, dtype, op_cls.__name__, gen_fn=gen_fn)
+    workload = UnaryActivationCase(n_total, dtype, op_cls.__name__, gen_fn=gen_fn)
     op = op_cls()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -223,7 +219,7 @@ def test_unary_math_edge(op_cls, values: list[float]) -> None:
 def test_erf_matches_rounded_erf_over_every_value(dtype: torch.dtype) -> None:
     """erf lands within one representable step of the rounded value, at every input."""
     workload = ErfRoundingWorkload(dtype)
-    TestBase.check(workload, ErfFwdOp(), *workload.gen_inputs())
+    check(workload, ErfFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -238,9 +234,9 @@ def test_erf_saturates_at_infinity_and_propagates_nan(dtype: torch.dtype) -> Non
 
 def _erf_launch_bounds(n_total: int, dtype: torch.dtype) -> tuple[int, list]:
     """Check erf on *n_total* elements of *dtype*; return its program's threads and launch bounds."""
-    test = UnaryMathTest(n_total, dtype, "ErfFwdOp", gen_fn=_randn)
+    workload = UnaryActivationCase(n_total, dtype, "ErfFwdOp", gen_fn=_randn)
     op = ErfFwdOp()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     return elementwise_launch_bounds(op)
 
 
@@ -276,30 +272,30 @@ def test_16bit_reciprocal_matches_torch_bit_for_bit(dtype: torch.dtype, repeats:
     the input runs the vector path, where a thread holding a divisor out of the approximate
     reciprocal's range takes the full divide."""
     workload = Exhaustive16BitWorkload("ReciprocalFwdOp", dtype, repeats)
-    TestBase.check(workload, ReciprocalFwdOp(), *workload.gen_inputs())
+    check(workload, ReciprocalFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_float32_reciprocal_divides_every_value_class() -> None:
     """Every float32 value class, tiled into whole 1024-element blocks, gives torch's bits."""
     workload = Float32SpecialValuesWorkload("ReciprocalFwdOp", 13_312)
-    TestBase.check(workload, ReciprocalFwdOp(), *workload.gen_inputs())
+    check(workload, ReciprocalFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_reciprocal_tuned() -> None:
     """Tuned mode picks a launch whose result matches the reference."""
-    test = UnaryMathTest(1_048_576, torch.float32, "ReciprocalFwdOp", gen_fn=_nonzero)
+    workload = UnaryActivationCase(1_048_576, torch.float32, "ReciprocalFwdOp", gen_fn=_nonzero)
     op = ReciprocalFwdOp()
     op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_float32_reciprocal_matches_torch_bit_for_bit() -> None:
     """The float32 reciprocal's Newton step gives the IEEE quotient at every significand."""
     workload = Float32BinadeWorkload("ReciprocalFwdOp")
-    TestBase.check(workload, ReciprocalFwdOp(), *workload.gen_inputs())
+    check(workload, ReciprocalFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke

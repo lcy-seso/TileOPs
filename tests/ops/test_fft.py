@@ -4,17 +4,12 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._kernels.fft import FFTC2CCall, FFTC2CFourStepKernel
 from tileops.fft import FFTC2CFwdOp
 from workloads.device import run_device
 from workloads.fft import FFTWorkload
 from workloads.numerics import compare_outputs
-
-
-class FFTTest(FFTWorkload, TestBase):
-    pass
-
 
 # One smallest or boundary case per execution structure. The range test below
 # covers every plan-table entry without allocating its tensors.
@@ -68,9 +63,9 @@ def test_fft_c2c(n: int, dtype: torch.dtype, batch_shape: tuple) -> None:
     free, _total = torch.accelerator.get_memory_info(run_device())
     if need > free:
         pytest.skip(f"n={n} {dtype} needs {need >> 20} MiB free, device has {free >> 20} MiB")
-    test = FFTTest(n, dtype, batch_shape=batch_shape)
+    workload = FFTWorkload(n, dtype, batch_shape=batch_shape)
     op = FFTC2CFwdOp()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.sm89
@@ -79,8 +74,8 @@ def test_fft_c2c(n: int, dtype: torch.dtype, batch_shape: tuple) -> None:
 def test_fft_c2c_in_99_kb_of_shared_memory(n: int) -> None:
     """SM89 gives a block 99 KB of opt-in shared memory, less than SM80 and SM90 do, so these
     lengths run on decompositions of their own."""
-    test = FFTTest(n, torch.complex64)
-    test.check(FFTC2CFwdOp(), *test.gen_inputs())
+    workload = FFTWorkload(n, torch.complex64)
+    check(workload, FFTC2CFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke

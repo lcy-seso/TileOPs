@@ -6,15 +6,11 @@ import pytest
 import torch
 
 from tests.cuda_graph_contract import CapturedGraph
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._perf.formulas import visible_scores
 from tileops.attention import GQAVarlenFwdOp
 from tileops.backend import OpNotAvailableError
 from workloads.attention.gqa.varlen import GQAVarlenFwdWorkload
-
-
-class GQAVarlenFwdTest(GQAVarlenFwdWorkload, TestBase):
-    pass
 
 
 def _padded(inputs: tuple) -> tuple:
@@ -299,7 +295,7 @@ def test_gqa_varlen_fwd_op(
     wr: int,
     dtype: torch.dtype,
 ) -> None:
-    test = GQAVarlenFwdTest(
+    workload = GQAVarlenFwdWorkload(
         batch, seqlens_q, seqlens_k, heads, heads_kv, dim, is_causal, wl, wr, dtype
     )
     op = GQAVarlenFwdOp(
@@ -307,23 +303,25 @@ def test_gqa_varlen_fwd_op(
         window_size_left=wl,
         window_size_right=wr,
     )
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_varlen_int32_max_right_window_is_no_window() -> None:
     """A right window of INT32_MAX keys hides none; added to a query position it overflows
     int32, so the output must equal the unwindowed reference."""
-    test = GQAVarlenFwdTest(2, [1024, 512], [1024, 600], 8, 2, 128, False, -1, -1, torch.float16)
-    test.check(GQAVarlenFwdOp(window_size_right=2**31 - 1), *test.gen_inputs())
+    workload = GQAVarlenFwdWorkload(
+        2, [1024, 512], [1024, 600], 8, 2, 128, False, -1, -1, torch.float16
+    )
+    check(workload, GQAVarlenFwdOp(window_size_right=2**31 - 1), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_varlen_reuses_one_op_across_dynamic_packed_totals() -> None:
     op = GQAVarlenFwdOp(is_causal=True)
     for q_lens, kv_lens in (([31, 65], [63, 129]), ([127, 3], [255, 7])):
-        test = GQAVarlenFwdTest(2, q_lens, kv_lens, 8, 2, 64, True, -1, -1, torch.float16)
-        test.check(op, *test.gen_inputs())
+        workload = GQAVarlenFwdWorkload(2, q_lens, kv_lens, 8, 2, 64, True, -1, -1, torch.float16)
+        check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -331,10 +329,12 @@ def test_varlen_reuses_one_op_across_dynamic_packed_totals() -> None:
 def test_varlen_tuned_window_large_batch() -> None:
     """Hopper window attention must retain valid packed inputs when tuning large batches."""
     batch = 449
-    test = GQAVarlenFwdTest(batch, [2] * batch, [4] * batch, 2, 1, 64, True, 64, -1, torch.float16)
+    workload = GQAVarlenFwdWorkload(
+        batch, [2] * batch, [4] * batch, 2, 1, 64, True, 64, -1, torch.float16
+    )
     op = GQAVarlenFwdOp(is_causal=True, window_size_left=64)
     op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -345,7 +345,7 @@ def test_varlen_tuned_window_large_batch() -> None:
 )
 def test_varlen_regular_forwards_scale_and_softcap(scale, cap) -> None:
     """A scale and a softcap preserve causal masking."""
-    test = GQAVarlenFwdTest(
+    workload = GQAVarlenFwdWorkload(
         2,
         [65, 127],
         [129, 255],
@@ -364,7 +364,7 @@ def test_varlen_regular_forwards_scale_and_softcap(scale, cap) -> None:
         sm_scale=scale,
         softcap=cap,
     )
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -375,9 +375,9 @@ def test_varlen_regular_forwards_scale_and_softcap(scale, cap) -> None:
 def test_varlen_handles_empty_requests_and_per_request_kv(
     q_lens: list[int], kv_lens: list[int]
 ) -> None:
-    test = GQAVarlenFwdTest(2, q_lens, kv_lens, 8, 2, 64, True, -1, -1, torch.float16)
+    workload = GQAVarlenFwdWorkload(2, q_lens, kv_lens, 8, 2, 64, True, -1, -1, torch.float16)
     op = GQAVarlenFwdOp(is_causal=True)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.sm90
@@ -446,23 +446,23 @@ def test_varlen_ws_dims_serve_ragged_requests_on_sm90(
 ) -> None:
     """Partial tiles, q_len > kv_len, and empty requests on the one-head warp-specialized
     kernel: a group of 3 does not divide a warpgroup's rows, so no packed program serves."""
-    test = GQAVarlenFwdTest(
+    workload = GQAVarlenFwdWorkload(
         len(q_lens), q_lens, kv_lens, 6, 2, dim, is_causal, -1, -1, torch.float16, **options
     )
     op = GQAVarlenFwdOp(is_causal=is_causal, **options)
-    inputs = test.gen_inputs()
+    inputs = workload.gen_inputs()
     assert op.key_for("gqa_varlen", op._varlen_call(_padded(inputs))) == key
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.smoke
 @pytest.mark.sm90
 def test_varlen_ws_kernel_claims_work_across_calls() -> None:
     """More work items than SMs; a later call must see the counter the first one reset."""
-    test = GQAVarlenFwdTest(1, [1152], [1152], 16, 8, 128, True, -1, -1, torch.bfloat16)
+    workload = GQAVarlenFwdWorkload(1, [1152], [1152], 16, 8, 128, True, -1, -1, torch.bfloat16)
     op = GQAVarlenFwdOp(is_causal=True)
-    inputs = test.gen_inputs()
-    test.check(op, *inputs)
+    inputs = workload.gen_inputs()
+    check(workload, op, *inputs)
     first = op(*inputs)
     assert torch.equal(op(*inputs), first)
 
@@ -610,13 +610,13 @@ def test_varlen_ws_serves_head_dims_off_the_contraction_step_on_sm90(
     """A TMA row is a multiple of 16 bytes, a 16-bit WGMMA contracts 16 channels a step, and
     TMA fills a box past a tensor's last channel with zeros: on SM90 the warp-specialized
     kernel serves head dims of 8-channel steps on tiles padded to the WGMMA step."""
-    test = GQAVarlenFwdTest(
+    workload = GQAVarlenFwdWorkload(
         len(q_lens), q_lens, kv_lens, heads, heads_kv, dim, is_causal, wl, wr, dtype, **options
     )
     op = GQAVarlenFwdOp(is_causal=is_causal, window_size_left=wl, window_size_right=wr, **options)
-    inputs = test.gen_inputs()
+    inputs = workload.gen_inputs()
     assert op.key_for("gqa_varlen", op._varlen_call(_padded(inputs))) == "gqa_varlen_ws"
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.sm90
@@ -753,13 +753,13 @@ def test_varlen_ws_runs_three_consumer_warpgroups_on_long_requests_on_sm90(
     wl = options.pop("window_size_left", -1)
     wr = options.pop("window_size_right", -1)
     has_sinks = options.pop("has_sinks", False)
-    test = GQAVarlenFwdTest(
+    workload = GQAVarlenFwdWorkload(
         len(q_lens), q_lens, kv_lens, heads, heads_kv, dim, is_causal, wl, wr, dtype,
         has_sinks=has_sinks, **options,
     )  # fmt: skip
     op = GQAVarlenFwdOp(is_causal=is_causal, window_size_left=wl, window_size_right=wr, **options)
-    inputs = test.gen_inputs()
-    test.check(op, *inputs)
+    inputs = workload.gen_inputs()
+    check(workload, op, *inputs)
     assert _launched_rows(op, inputs) == 192
 
 
@@ -771,8 +771,10 @@ def test_varlen_ws_keeps_two_consumers_for_short_requests_on_sm90() -> None:
     call of short requests keeps two. The d72-bidirectional case of
     test_varlen_ws_serves_head_dims_off_the_contraction_step_on_sm90 checks its output."""
     q_lens, kv_lens = [129, 65, 6, 0, 300], [33, 131, 2, 0, 400]
-    test = GQAVarlenFwdTest(len(q_lens), q_lens, kv_lens, 4, 4, 72, False, -1, -1, torch.bfloat16)
-    assert _launched_rows(GQAVarlenFwdOp(), test.gen_inputs()) == 128
+    workload = GQAVarlenFwdWorkload(
+        len(q_lens), q_lens, kv_lens, 4, 4, 72, False, -1, -1, torch.bfloat16
+    )
+    assert _launched_rows(GQAVarlenFwdOp(), workload.gen_inputs()) == 128
 
 
 @pytest.mark.sm90
@@ -814,12 +816,12 @@ def test_varlen_refuses_head_dim_72_where_the_ws_kernel_cannot_before_building(
 ) -> None:
     """The general kernel contracts the head dim 16 channels at a time, so a head dim-72 call
     the warp-specialized kernel refuses has no kernel."""
-    test = GQAVarlenFwdTest(
+    workload = GQAVarlenFwdWorkload(
         len(q_lens), q_lens, kv_lens, 4, 4, 72, True, -1, -1, torch.bfloat16, **options
     )
     op = GQAVarlenFwdOp(is_causal=True, **options)
     with pytest.raises(OpNotAvailableError, match=reason):
-        op(*test.gen_inputs())
+        op(*workload.gen_inputs())
     assert not op._entries_built("gqa_varlen")
 
 
@@ -925,7 +927,7 @@ def test_varlen_rope_rotates_at_per_request_positions(
     window_size_left: int,
 ) -> None:
     """Query token i of a request sits at kv_len - q_len + i, key token j at j."""
-    test = GQAVarlenFwdTest(
+    workload = GQAVarlenFwdWorkload(
         len(q_lens), q_lens, kv_lens, 8, 2, dim, True, window_size_left, -1, torch.float16,
         pos_encoding_mode="rope", rotary_dim=rotary_dim, rope_layout=rope_layout,
     )  # fmt: skip
@@ -936,7 +938,7 @@ def test_varlen_rope_rotates_at_per_request_positions(
         rotary_dim=rotary_dim,
         rope_layout=rope_layout,
     )
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 # ----------------------------------------------------------------------
@@ -989,7 +991,7 @@ def test_varlen_sliding_window_with_fused_rope(
     q_lens: list[int], kv_lens: list[int], is_causal: bool, wl: int, wr: int
 ) -> None:
     """Window bounds hold when the call also rotates Q and K."""
-    test = GQAVarlenFwdTest(
+    workload = GQAVarlenFwdWorkload(
         len(q_lens),
         q_lens,
         kv_lens,
@@ -1003,7 +1005,7 @@ def test_varlen_sliding_window_with_fused_rope(
         pos_encoding_mode="rope",
     )
     op = GQAVarlenFwdOp(is_causal, wl, wr, pos_encoding_mode="rope")
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.sm90
@@ -1042,9 +1044,9 @@ def test_varlen_one_op_selects_packed_programs_by_call() -> None:
     op = GQAVarlenFwdOp(is_causal=True)
     calls = (([1, 1], [3000, 2000], (True, False)), ([512, 512], [1024, 2048], (False, True)))
     for q_lens, kv_lens, facts in (*calls, calls[0]):
-        test = GQAVarlenFwdTest(2, q_lens, kv_lens, 64, 8, 64, True, -1, -1, torch.bfloat16)
-        inputs = test.gen_inputs()
-        test.check(op, *inputs)
+        workload = GQAVarlenFwdWorkload(2, q_lens, kv_lens, 64, 8, 64, True, -1, -1, torch.bfloat16)
+        inputs = workload.gen_inputs()
+        check(workload, op, *inputs)
         kernel = op._get_kernel(_padded(inputs))
         kernel = getattr(kernel, "__self__", kernel)
         assert kernel._program_facts(inputs[0]) == facts
@@ -1256,12 +1258,12 @@ def test_varlen_packs_short_requests_on_sm90(
     is_causal = options.pop("is_causal", True)
     wl = options.pop("window_size_left", -1)
     has_sinks = options.pop("has_sinks", False)
-    test = GQAVarlenFwdTest(
+    workload = GQAVarlenFwdWorkload(
         len(q_lens), q_lens, kv_lens, heads, heads_kv, dim, is_causal, wl, -1, dtype,
         has_sinks=has_sinks, **options,
     )  # fmt: skip
     op = GQAVarlenFwdOp(is_causal=is_causal, window_size_left=wl, **options)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.sm90
@@ -1286,11 +1288,13 @@ def test_varlen_split_keys_merge_across_calls_streams_and_graphs(
     """The last part of a split item leaves its merge counter at zero: a later call, a
     concurrent call on another stream and a replayed graph each merge their parts afresh. The
     replays hold the offsets, which set the case's split."""
-    test = GQAVarlenFwdTest(len(q_lens), q_lens, kv_lens, 32, 8, 128, True, -1, -1, torch.bfloat16)
+    workload = GQAVarlenFwdWorkload(
+        len(q_lens), q_lens, kv_lens, 32, 8, 128, True, -1, -1, torch.bfloat16
+    )
     op = GQAVarlenFwdOp(is_causal=True)
-    inputs = test.gen_inputs()
-    test.check(op, *inputs)
-    test.check(op, *inputs)
+    inputs = workload.gen_inputs()
+    check(workload, op, *inputs)
+    check(workload, op, *inputs)
     side = torch.cuda.Stream()
 
     def two_streams(*args):
@@ -1302,10 +1306,10 @@ def test_varlen_split_keys_merge_across_calls_streams_and_graphs(
         torch.testing.assert_close(first, second, atol=1e-2, rtol=1e-2)
         return second
 
-    test.check(op, *inputs, runs=two_streams)
-    captured = test.gen_inputs()
+    check(workload, op, *inputs, runs=two_streams)
+    captured = workload.gen_inputs()
     graph = CapturedGraph((op, captured))
     for _ in range(2):
-        graph.renew(test.gen_inputs())
+        graph.renew(workload.gen_inputs())
         graph.replay(held=captured[3:5])
-        test.check(op, *captured, runs=lambda *args: graph.outputs[0])
+        check(workload, op, *captured, runs=lambda *args: graph.outputs[0])

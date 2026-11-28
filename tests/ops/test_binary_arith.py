@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from tests.cuda_graph_contract import check_replay
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._ops.elementwise import (
     AddFwdOp,
     DivFwdOp,
@@ -56,15 +56,11 @@ class AddBroadcastFixture(FixtureBase):
     ]
 
 
-class AddBroadcastTest(AddBroadcastWorkload, TestBase):
-    pass
-
-
 @AddBroadcastFixture
 def test_add_broadcast(a_shape, b_shape, dtype: torch.dtype) -> None:
-    test = AddBroadcastTest(a_shape, b_shape, dtype)
+    workload = AddBroadcastWorkload(a_shape, b_shape, dtype)
     op = AddFwdOp()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 # One op per broadcast grid configuration: unstaged (sub), staged with a guarded quotient
@@ -109,55 +105,43 @@ class ArithBroadcastFixture(FixtureBase):
 @ArithBroadcastFixture
 def test_binary_arith_broadcast(op_cls, gen, a_shape, b_shape) -> None:
     a, b = gen(a_shape, torch.float16), gen(b_shape, torch.float16)
-    TestBase.check(ElementwiseWorkload(op_cls.__name__, (a, b)), op_cls(), a, b)
-
-
-class BinarySameShapeTest(BinarySameShapeCase, TestBase):
-    pass
-
-
-class BinaryPositiveTest(BinaryPositiveCase, TestBase):
-    pass
-
-
-class PowPositiveTest(PowPositiveWorkload, TestBase):
-    pass
+    check(ElementwiseWorkload(op_cls.__name__, (a, b)), op_cls(), a, b)
 
 
 class BinaryArithOpFixture(FixtureBase):
     PARAMS = [
         (
-            "op_cls, make_test",
+            "op_cls, make_workload",
             [
                 pytest.param(
-                    AddFwdOp, lambda n, d: BinarySameShapeTest(n, d, "AddFwdOp"), id="add"
+                    AddFwdOp, lambda n, d: BinarySameShapeCase(n, d, "AddFwdOp"), id="add"
                 ),
                 pytest.param(
-                    SubFwdOp, lambda n, d: BinarySameShapeTest(n, d, "SubFwdOp"), id="sub"
+                    SubFwdOp, lambda n, d: BinarySameShapeCase(n, d, "SubFwdOp"), id="sub"
                 ),
                 pytest.param(
-                    MulFwdOp, lambda n, d: BinarySameShapeTest(n, d, "MulFwdOp"), id="mul"
+                    MulFwdOp, lambda n, d: BinarySameShapeCase(n, d, "MulFwdOp"), id="mul"
                 ),
-                pytest.param(DivFwdOp, lambda n, d: BinaryPositiveTest(n, d, "DivFwdOp"), id="div"),
+                pytest.param(DivFwdOp, lambda n, d: BinaryPositiveCase(n, d, "DivFwdOp"), id="div"),
                 pytest.param(
                     RemainderFwdOp,
-                    lambda n, d: BinaryPositiveTest(n, d, "RemainderFwdOp"),
+                    lambda n, d: BinaryPositiveCase(n, d, "RemainderFwdOp"),
                     id="remainder",
                 ),
-                pytest.param(PowFwdOp, PowPositiveTest, id="pow"),
+                pytest.param(PowFwdOp, PowPositiveWorkload, id="pow"),
                 pytest.param(
                     FloorDivideFwdOp,
-                    lambda n, d: BinaryPositiveTest(n, d, "FloorDivideFwdOp"),
+                    lambda n, d: BinaryPositiveCase(n, d, "FloorDivideFwdOp"),
                     id="floor_divide",
                 ),
                 pytest.param(
                     MaximumFwdOp,
-                    lambda n, d: BinarySameShapeTest(n, d, "MaximumFwdOp"),
+                    lambda n, d: BinarySameShapeCase(n, d, "MaximumFwdOp"),
                     id="maximum",
                 ),
                 pytest.param(
                     MinimumFwdOp,
-                    lambda n, d: BinarySameShapeTest(n, d, "MinimumFwdOp"),
+                    lambda n, d: BinarySameShapeCase(n, d, "MinimumFwdOp"),
                     id="minimum",
                 ),
             ],
@@ -174,10 +158,10 @@ class BinaryArithOpFixture(FixtureBase):
 
 
 @BinaryArithOpFixture
-def test_binary_arith_op(op_cls, make_test, n_total: int, dtype: torch.dtype) -> None:
-    test = make_test(n_total, dtype)
+def test_binary_arith_op(op_cls, make_workload, n_total: int, dtype: torch.dtype) -> None:
+    workload = make_workload(n_total, dtype)
     op = op_cls()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.sm90
@@ -238,7 +222,7 @@ def test_floor_ops_match_torch_on_special_values(a_shape, b_shape, dtype) -> Non
     ):
         workload = ElementwiseWorkload(op_cls.__name__, (a, b), **kwargs)
         op = op_cls(**kwargs)
-        TestBase.check(workload, op, a, b)
+        check(workload, op, a, b)
         out, ref = op(a, b), workload.ref_program(a, b)
         number = ~ref.isnan()
         assert torch.equal(torch.signbit(out[number]), torch.signbit(ref[number]))
@@ -356,7 +340,7 @@ def test_float16_div_rounds_subnormal_ties_as_torch(broadcast) -> None:
     """float16 division gives torch's quotient where a two-ulp quotient rounds a subnormal
     tie the wrong way, and keeps the special results of zero, infinite and extreme divisors."""
     workload = Float16DivisorClassesWorkload("DivFwdOp", broadcast)
-    TestBase.check(workload, DivFwdOp(), *workload.gen_inputs())
+    check(workload, DivFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -426,17 +410,13 @@ class LerpFixture(FixtureBase):
     ]
 
 
-class LerpTest(LerpCase, TestBase):
-    pass
-
-
 @LerpFixture
 def test_lerp_op(n_total: int, dtype: torch.dtype) -> None:
     """Validate lerp across Number weights, one instance serving every value."""
     op = LerpFwdOp()
     for weight in [0.0, 0.3, 0.5, 0.7, 1.0]:
-        test = LerpTest(n_total, dtype, weight=weight)
-        test.check(op, *test.gen_inputs())
+        workload = LerpCase(n_total, dtype, weight=weight)
+        check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -450,7 +430,7 @@ def test_lerp_number_weight_broadcast(a_shape, b_shape) -> None:
     a = torch.randn(a_shape, dtype=torch.float16, device=run_device())
     b = torch.randn(b_shape, dtype=torch.float16, device=run_device())
     workload = ElementwiseWorkload("LerpFwdOp", (a, b, 0.5))
-    TestBase.check(workload, LerpFwdOp(), *workload.gen_inputs())
+    check(workload, LerpFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -508,7 +488,7 @@ def test_max_min_nan_and_signed_zero(op_cls, dtype: torch.dtype) -> None:
     b = torch.tensor([1.0, nan, nan, -0.0, 0.0, 0.0, -0.0, 2.0], dtype=dtype, device=run_device())
     workload = ElementwiseWorkload(op_cls.__name__, (a, b))
     op = op_cls()
-    TestBase.check(workload, op, a, b)
+    check(workload, op, a, b)
     out, ref = op(a, b), workload.ref_program(a, b)
     assert torch.equal(torch.isnan(out), torch.isnan(ref)), f"out={out}, ref={ref}"
     mask = ~torch.isnan(ref)
@@ -594,7 +574,7 @@ class OptimizedMaxMinFixture(FixtureBase):
 def test_max_min_optimized_large(op_cls, n_total: int, dtype: torch.dtype) -> None:
     a = torch.randn(n_total, device=run_device(), dtype=dtype)
     b = torch.randn(n_total, device=run_device(), dtype=dtype)
-    TestBase.check(ElementwiseWorkload(op_cls.__name__, (a, b)), op_cls(), a, b)
+    check(ElementwiseWorkload(op_cls.__name__, (a, b)), op_cls(), a, b)
 
 
 @pytest.mark.parametrize(
@@ -608,7 +588,7 @@ def test_binary_ops_under_tuning(tune: bool) -> None:
         op = op_cls()
         if tune:
             op.request_tune()
-        TestBase.check(ElementwiseWorkload(op_cls.__name__, (a, b)), op, a, b)
+        check(ElementwiseWorkload(op_cls.__name__, (a, b)), op, a, b)
 
 
 # LerpFwdOp with a Tensor weight
@@ -626,7 +606,7 @@ def test_lerp_tensor_same_shape(dtype: torch.dtype) -> None:
     a = torch.randn(shape, device=run_device(), dtype=dtype)
     b = torch.randn(shape, device=run_device(), dtype=dtype)
     w = torch.rand(shape, device=run_device(), dtype=dtype)
-    TestBase.check(ElementwiseWorkload("LerpFwdOp", (a, b, w)), LerpFwdOp(), a, b, w)
+    check(ElementwiseWorkload("LerpFwdOp", (a, b, w)), LerpFwdOp(), a, b, w)
 
 
 @pytest.mark.smoke
@@ -647,7 +627,7 @@ def test_lerp_tensor_reads_broadcast_operands_in_place(a_shape, b_shape, w_shape
     a = torch.randn(a_shape, device=run_device(), dtype=dtype)
     b = torch.randn(b_shape, device=run_device(), dtype=dtype)
     w = torch.rand(w_shape, device=run_device(), dtype=dtype) * 1.5 - 0.25
-    TestBase.check(ElementwiseWorkload("LerpFwdOp", (a, b, w)), LerpFwdOp(), a, b, w)
+    check(ElementwiseWorkload("LerpFwdOp", (a, b, w)), LerpFwdOp(), a, b, w)
 
 
 @pytest.mark.smoke
@@ -692,7 +672,7 @@ def test_div_rounding_mode_eager(rounding_mode: str, dtype: torch.dtype) -> None
     b = torch.randn(*shape, dtype=dtype, device=run_device()) * 2.0 + 1.0
     b = torch.where(b.abs() < 0.5, torch.full_like(b, 1.0), b)
     workload = ElementwiseWorkload("DivFwdOp", (a, b), rounding_mode=rounding_mode)
-    TestBase.check(workload, DivFwdOp(rounding_mode=rounding_mode), a, b)
+    check(workload, DivFwdOp(rounding_mode=rounding_mode), a, b)
 
 
 @pytest.mark.smoke
@@ -739,7 +719,7 @@ def test_binary_arith_integer_dtype_add(dtype: torch.dtype) -> None:
     """AddFwdOp matches torch.add on every manifest-declared int dtype."""
     n = 4_096
     a, b = _gen_int_pair(n, dtype)
-    TestBase.check(ElementwiseWorkload("AddFwdOp", (a, b)), AddFwdOp(), a, b)
+    check(ElementwiseWorkload("AddFwdOp", (a, b)), AddFwdOp(), a, b)
 
 
 class BinaryArithOpIntFixture(FixtureBase):
@@ -758,7 +738,7 @@ class BinaryArithOpIntFixture(FixtureBase):
 def test_binary_arith_op_int32(op_cls) -> None:
     """Each arithmetic op matches its torch reference on int32 inputs."""
     a, b = _gen_int_pair(4_096, torch.int32)
-    TestBase.check(ElementwiseWorkload(op_cls.__name__, (a, b)), op_cls(), a, b)
+    check(ElementwiseWorkload(op_cls.__name__, (a, b)), op_cls(), a, b)
 
 
 class BinaryArithBoolDtypeFixture(FixtureBase):
@@ -773,7 +753,7 @@ def test_binary_arith_bool_dtype(op_cls) -> None:
     n = 4_096
     a = torch.randint(0, 2, (n,), device=run_device()).to(torch.bool)
     b = torch.randint(0, 2, (n,), device=run_device()).to(torch.bool)
-    TestBase.check(ElementwiseWorkload(op_cls.__name__, (a, b)), op_cls(), a, b)
+    check(ElementwiseWorkload(op_cls.__name__, (a, b)), op_cls(), a, b)
 
 
 @pytest.mark.smoke
@@ -829,7 +809,7 @@ def test_add_bool_broadcast() -> None:
     b_shape = (1, 16)
     a = torch.randint(0, 2, a_shape, device=run_device()).to(torch.bool)
     b = torch.randint(0, 2, b_shape, device=run_device()).to(torch.bool)
-    TestBase.check(ElementwiseWorkload("AddFwdOp", (a, b)), AddFwdOp(), a, b)
+    check(ElementwiseWorkload("AddFwdOp", (a, b)), AddFwdOp(), a, b)
 
 
 @pytest.mark.smoke
@@ -838,4 +818,4 @@ def test_add_bool_broadcast() -> None:
 def test_lerp_tensor_cancellation_uses_float_intermediates(dtype: torch.dtype) -> None:
     """Rounding end-start to the storage dtype can erase a nonzero midpoint."""
     workload = LerpCancellationWorkload(dtype)
-    TestBase.check(workload, LerpFwdOp(), *workload.gen_inputs())
+    check(workload, LerpFwdOp(), *workload.gen_inputs())

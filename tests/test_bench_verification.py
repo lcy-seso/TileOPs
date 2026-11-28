@@ -24,10 +24,10 @@ def test_both_consumers_reject_the_same_wrong_result(consumer, monkeypatch):
     from tileops._ops.elementwise import AbsFwdOp
 
     if consumer == "test":
-        from tests.workload_test_base import TestBase
+        from tests.workload_test_base import check
 
         with pytest.raises(AssertionError):
-            TestBase.check(_workload(), AbsFwdOp(), torch.ones(1), runs=lambda x: x + 0.001)
+            check(_workload(), AbsFwdOp(), torch.ones(1), runs=lambda x: x + 0.001)
     else:
         from benchmarks import api
         from benchmarks._cases import Entry

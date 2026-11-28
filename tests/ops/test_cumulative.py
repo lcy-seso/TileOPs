@@ -3,17 +3,13 @@
 import pytest
 import torch
 
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops._ops.reduction.cumulative import CumprodFwdOp, CumsumFwdOp
 from workloads.device import run_device
 from workloads.numerics import compare_outputs
 from workloads.reduction import CumprodExceptionalWorkload, CumulativeWorkload
 
 _OPS = {"cumsum": CumsumFwdOp, "cumprod": CumprodFwdOp}
-
-
-class CumulativeTest(CumulativeWorkload, TestBase):
-    pass
 
 
 def _input(op_kind: str, shape: tuple, dtype: torch.dtype) -> torch.Tensor:
@@ -47,8 +43,8 @@ def _row_cases() -> list:
 
 @pytest.mark.parametrize("op_kind, m, n, dtype", _row_cases())
 def test_cumulative_rows(op_kind: str, m: int, n: int, dtype: torch.dtype) -> None:
-    test = CumulativeTest((m, n), dtype, op_kind, use_small_range=op_kind == "cumprod")
-    test.check(_OPS[op_kind](dim=-1), *test.gen_inputs())
+    workload = CumulativeWorkload((m, n), dtype, op_kind, use_small_range=op_kind == "cumprod")
+    check(workload, _OPS[op_kind](dim=-1), *workload.gen_inputs())
 
 
 @pytest.mark.smoke

@@ -5,16 +5,12 @@ import torch
 
 from tests.compile_contract import assert_op_owns_graph_nodes, register_compile_contract
 from tests.cuda_graph_contract import check_replay
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops.attention import PagedKVCacheWriteFwdOp
 from workloads.attention.paged_cache_write import (
     PagedKVCacheWriteWorkload,
     paged_cache_write_result,
 )
-
-
-class PagedKVCacheWriteTest(PagedKVCacheWriteWorkload, TestBase):
-    """The workload as a test case: the reference and its policy come from the workload."""
 
 
 @pytest.mark.parametrize(
@@ -156,14 +152,14 @@ def test_paged_kv_cache_write_scatters_the_named_rows(
     tokens, heads_kv, dim, page_size, num_pages, dtype, cache_dtype, slots, tune
 ):
     """Every row a slot names holds the new k and v; the rest of both pools is untouched."""
-    workload = PagedKVCacheWriteTest(
+    workload = PagedKVCacheWriteWorkload(
         tokens, heads_kv, dim, page_size, num_pages, dtype, cache_dtype, slots
     )
     inputs = workload.gen_inputs()
     op = PagedKVCacheWriteFwdOp()
     if tune:
         op.request_tune()
-    TestBase.check(workload, op, *inputs, runs=lambda *args: paged_cache_write_result(op, *args))
+    check(workload, op, *inputs, runs=lambda *args: paged_cache_write_result(op, *args))
 
 
 def _laid_out(t: torch.Tensor, layout: tuple) -> tuple[torch.Tensor, torch.Tensor]:
@@ -233,7 +229,7 @@ def test_paged_kv_cache_write_reads_strided_rows(
     no one view merges; and an expanded v, whose token rows lie zero elements apart and are
     read in place.
     """
-    workload = PagedKVCacheWriteTest(tokens, heads_kv, dim, 64, 8, torch.bfloat16, cache_dtype)
+    workload = PagedKVCacheWriteWorkload(tokens, heads_kv, dim, 64, 8, torch.bfloat16, cache_dtype)
     k, v, *rest = workload.gen_inputs()
     k, k_storage = _laid_out(k, k_layout)
     v, v_storage = _laid_out(v, v_layout)
@@ -245,7 +241,7 @@ def test_paged_kv_cache_write_reads_strided_rows(
         assert torch.equal(k_storage, before[0]) and torch.equal(v_storage, before[1])
         return result
 
-    TestBase.check(workload, op, k, v, *rest, runs=run)
+    check(workload, op, k, v, *rest, runs=run)
 
 
 @pytest.mark.sm90
@@ -261,7 +257,7 @@ def test_paged_kv_cache_write_graph_replay(num_pages: int) -> None:
     """Qwen3.8-27B's decode call, one bfloat16 token into the pages of max_seq_len 4096 or 4128.
     Every draw repeats its rows, caches and slot, so the replay negates the values and writes
     the next row, the first of the last page."""
-    workload = PagedKVCacheWriteTest(
+    workload = PagedKVCacheWriteWorkload(
         1, 4, 256, 64, num_pages, torch.bfloat16, slots=[(num_pages - 1) * 64 - 1]
     )
     key, value, k_cache, v_cache, slots, *rest = workload.gen_inputs()
@@ -272,7 +268,7 @@ def test_paged_kv_cache_write_graph_replay(num_pages: int) -> None:
 @pytest.mark.smoke
 def test_paged_kv_cache_write_saturates_fp8_overflow():
     """FP8 preserves NaN, saturates overflow/infinities, and rounds ties to even."""
-    workload = PagedKVCacheWriteTest(1, 1, 16, 2, 1, torch.float16, torch.float8_e4m3fn, [1])
+    workload = PagedKVCacheWriteWorkload(1, 1, 16, 2, 1, torch.float16, torch.float8_e4m3fn, [1])
     inputs = workload.gen_inputs()
     k, v, _, _, _, k_scale, v_scale = inputs
     values = torch.tensor(
@@ -302,13 +298,13 @@ def test_paged_kv_cache_write_saturates_fp8_overflow():
     k_scale.fill_(1)
     v_scale.fill_(1)
     op = PagedKVCacheWriteFwdOp()
-    TestBase.check(workload, op, *inputs, runs=lambda *args: paged_cache_write_result(op, *args))
+    check(workload, op, *inputs, runs=lambda *args: paged_cache_write_result(op, *args))
 
 
 @pytest.mark.smoke
 def test_paged_kv_cache_write_skips_every_token():
     """All-negative slots leave both sentinel-filled page pools unchanged."""
-    workload = PagedKVCacheWriteTest(3, 2, 64, 7, 4, torch.bfloat16, slots=[-1, -1, -1])
+    workload = PagedKVCacheWriteWorkload(3, 2, 64, 7, 4, torch.bfloat16, slots=[-1, -1, -1])
     k, v, k_cache, v_cache, slots, k_scale, v_scale = workload.gen_inputs()
     k_cache.fill_(3.0)
     v_cache.fill_(-2.0)
@@ -316,7 +312,7 @@ def test_paged_kv_cache_write_skips_every_token():
     op = PagedKVCacheWriteFwdOp()
     assert op(k, v, k_cache, v_cache, slots, k_scale, v_scale) is None
     assert torch.equal(k_cache, before[0]) and torch.equal(v_cache, before[1])
-    TestBase.check(
+    check(
         workload,
         op,
         k,
@@ -334,7 +330,7 @@ def test_paged_kv_cache_write_skips_every_token():
 def test_paged_kv_cache_write_past_the_pool_writes_nothing():
     """A slot of ``num_pages * page_size`` writes neither pool nor the page after it."""
     num_pages, page_size = 2, 16
-    workload = PagedKVCacheWriteTest(1, 2, 64, page_size, num_pages, torch.bfloat16)
+    workload = PagedKVCacheWriteWorkload(1, 2, 64, page_size, num_pages, torch.bfloat16)
     k, v, k_cache, v_cache, _, k_scale, v_scale = workload.gen_inputs()
     # Each pool is a view of a buffer one page longer, so a store past the pool lands in
     # memory the test owns and can see.
@@ -353,7 +349,7 @@ def test_paged_kv_cache_write_past_the_pool_writes_nothing():
 @pytest.mark.smoke
 def test_paged_kv_cache_write_of_no_tokens_writes_nothing():
     """A call with no token writes neither pool; the caches it is handed are non-empty."""
-    workload = PagedKVCacheWriteTest(0, 2, 64, 16, 2, torch.bfloat16)
+    workload = PagedKVCacheWriteWorkload(0, 2, 64, 16, 2, torch.bfloat16)
     k, v, k_cache, v_cache, slots, k_scale, v_scale = workload.gen_inputs()
     before = (k_cache.clone(), v_cache.clone())
     op = PagedKVCacheWriteFwdOp()
@@ -373,7 +369,7 @@ def test_paged_kv_cache_write_of_no_tokens_writes_nothing():
 def test_paged_kv_cache_write_refuses_an_invalid_tensor_contract(invalid):
     """Unsupported input/cache dtypes and incompatible scale presence are rejected."""
     cache_dtype = torch.float8_e4m3fn if invalid == "scale-missing" else torch.bfloat16
-    workload = PagedKVCacheWriteTest(2, 2, 64, 16, 2, torch.bfloat16, cache_dtype)
+    workload = PagedKVCacheWriteWorkload(2, 2, 64, 16, 2, torch.bfloat16, cache_dtype)
     inputs = list(workload.gen_inputs())
     if invalid == "scale-missing":
         inputs[5] = inputs[6] = None
@@ -392,7 +388,7 @@ def test_paged_kv_cache_write_refuses_an_invalid_tensor_contract(invalid):
 @pytest.mark.usefixtures("isolated_dynamo")
 def test_paged_kv_cache_write_compiles_cold_to_its_operator():
     """A cold fullgraph compile owns the graph and writes the same rows as eager."""
-    workload = PagedKVCacheWriteTest(5, 2, 64, 7, 3, torch.bfloat16, slots=[20, -1, 0, 6, 13])
+    workload = PagedKVCacheWriteWorkload(5, 2, 64, 7, 3, torch.bfloat16, slots=[20, -1, 0, 6, 13])
     assert_op_owns_graph_nodes(PagedKVCacheWriteFwdOp(), *workload.gen_inputs())
     compiled_inputs = workload.gen_inputs()
     torch.compile(PagedKVCacheWriteFwdOp(), fullgraph=True)(*compiled_inputs)

@@ -5,7 +5,7 @@ import torch
 
 from tests.compile_contract import assert_op_owns_graph_nodes, register_compile_contract
 from tests.cuda_graph_contract import CapturedGraph
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops.sequence_modeling import NGramHashFwdOp
 from workloads.numerics import compare_outputs
 from workloads.sequence_modeling.ngram_hash import (
@@ -17,7 +17,7 @@ from workloads.sequence_modeling.ngram_hash import (
 def _check(workload, op=None, inputs=None, subject=None):
     op = NGramHashFwdOp(workload.eos_token_id) if op is None else op
     inputs = workload.gen_inputs() if inputs is None else inputs
-    TestBase.check(
+    check(
         workload,
         op,
         *inputs,

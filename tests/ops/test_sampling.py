@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from tests.misaligned import misaligned
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops.backend import OpNotAvailableError
 from tileops.sampling import (
     ChainSpeculativeSamplingFwdOp,
@@ -425,7 +425,7 @@ def test_sampling_from_probs():
     op = SamplingFromProbsFwdOp()
     out = _run(op, probs, seed, offset)
     assert out.dtype == torch.int32
-    TestBase.check(workload, op, probs, seed, offset, runs=lambda *args: _run(op, *args))
+    check(workload, op, probs, seed, offset, runs=lambda *args: _run(op, *args))
     assert torch.equal(out, op(probs, seed, offset))
 
 
@@ -473,7 +473,7 @@ def test_chain_speculative_sampling():
     assert all(map(torch.equal, ref, workload.ref_program(*inputs)))
     op = ChainSpeculativeSamplingFwdOp()
     out = _run(op, *inputs)
-    TestBase.check(workload, op, *inputs, runs=lambda *args: _run(op, *args))
+    check(workload, op, *inputs, runs=lambda *args: _run(op, *args))
     assert all(map(torch.equal, out, op(*inputs)))
 
 

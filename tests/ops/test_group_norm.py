@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from tests.misaligned import misaligned
-from tests.workload_test_base import FixtureBase, TestBase, smoke_first
+from tests.workload_test_base import FixtureBase, check, smoke_first
 from tileops._kernels.norm import GroupNormSplitKernel
 from tileops._ops._signature_codegen import CheckError
 from tileops._ops.norm.group_norm import GroupNormFwdOp
@@ -16,19 +16,6 @@ from workloads.norm import (
     normalization_verification,
 )
 from workloads.numerics import compare_outputs
-
-
-class GroupNormTest(GroupNormWorkload, TestBase):
-    pass
-
-
-class GroupNormFarFromZeroTest(GroupNormFarFromZeroWorkload, TestBase):
-    pass
-
-
-class GroupNormOutlierTest(GroupNormOutlierWorkload, TestBase):
-    pass
-
 
 _FAR_INPUTS = [
     (torch.float32, "constant"),
@@ -96,10 +83,10 @@ _GROUP_NORM_FAR_CASES = smoke_first(
 def test_group_norm_normalizes_groups_far_from_zero(
     n, c, spatial, g, path, affine, dtype, row
 ) -> None:
-    test = GroupNormFarFromZeroTest(n, c, spatial, g, dtype, row=row)
-    x, weight, bias = test.gen_inputs()
+    workload = GroupNormFarFromZeroWorkload(n, c, spatial, g, dtype, row=row)
+    x, weight, bias = workload.gen_inputs()
     op = GroupNormFwdOp(num_groups=g)
-    test.check(op, *((x, weight, bias) if affine else (x,)))
+    check(workload, op, *((x, weight, bias) if affine else (x,)))
     (built,) = op.iter_kernels()
     assert _path(built) == path
 
@@ -128,10 +115,10 @@ def test_group_norm_normalizes_groups_far_from_zero(
 def test_group_norm_normalizes_groups_led_by_an_outlier(
     n, c, spatial, g, stride, affine, path
 ) -> None:
-    test = GroupNormOutlierTest(n, c, spatial, g, torch.float32, stride=stride)
-    x, weight, bias = test.gen_inputs()
+    workload = GroupNormOutlierWorkload(n, c, spatial, g, torch.float32, stride=stride)
+    x, weight, bias = workload.gen_inputs()
     op = GroupNormFwdOp(num_groups=g)
-    test.check(op, *((x, weight, bias) if affine else (x,)))
+    check(workload, op, *((x, weight, bias) if affine else (x,)))
     (built,) = op.iter_kernels()
     assert _path(built) == path
 
@@ -256,9 +243,9 @@ class GroupNormFixture(FixtureBase):
 
 @GroupNormFixture
 def test_group_norm_op(n: int, c: int, spatial: tuple, g: int, dtype: torch.dtype) -> None:
-    test = GroupNormTest(n, c, spatial, g, dtype)
+    workload = GroupNormWorkload(n, c, spatial, g, dtype)
     op = GroupNormFwdOp(num_groups=g)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 class GroupNormNonContigFixture(FixtureBase):
@@ -276,10 +263,10 @@ class GroupNormNonContigFixture(FixtureBase):
 def test_group_norm_non_contiguous(
     n: int, c: int, spatial: tuple, g: int, dtype: torch.dtype
 ) -> None:
-    test = GroupNormTest(n, c, spatial, g, dtype)
-    _, weight, bias = test.gen_inputs()
+    workload = GroupNormWorkload(n, c, spatial, g, dtype)
+    _, weight, bias = workload.gen_inputs()
     x = torch.randn((n, c * 2, *spatial), dtype=dtype, device=run_device())[:, :c]
-    test.check(GroupNormFwdOp(num_groups=g), x, weight, bias)
+    check(workload, GroupNormFwdOp(num_groups=g), x, weight, bias)
 
 
 @pytest.mark.in_tree_kernels
@@ -289,8 +276,8 @@ def test_group_norm_lazy_cache_reuse_and_respecialization() -> None:
     op = GroupNormFwdOp(num_groups=4)
 
     def run_case(n: int, c: int, spatial: tuple[int, ...], dtype: torch.dtype) -> None:
-        test = GroupNormTest(n, c, spatial, 4, dtype)
-        test.check(op, *test.gen_inputs())
+        workload = GroupNormWorkload(n, c, spatial, 4, dtype)
+        check(workload, op, *workload.gen_inputs())
 
     run_case(2, 16, (4, 4), torch.float16)
     assert op.eval_roofline() == (
@@ -355,9 +342,9 @@ def test_group_norm_no_affine_op(
     n: int, c: int, spatial: tuple, g: int, dtype: torch.dtype
 ) -> None:
     """No-affine GroupNorm op matches torch.nn.functional.group_norm with weight=bias=None."""
-    test = GroupNormTest(n, c, spatial, g, dtype)
-    x, _, _ = test.gen_inputs()
-    test.check(GroupNormFwdOp(num_groups=g), x)
+    workload = GroupNormWorkload(n, c, spatial, g, dtype)
+    x, _, _ = workload.gen_inputs()
+    check(workload, GroupNormFwdOp(num_groups=g), x)
 
 
 @pytest.mark.smoke
@@ -376,10 +363,10 @@ def test_group_norm_forward_signature() -> None:
 @pytest.mark.parametrize("give", ["weight", "bias"])
 def test_group_norm_takes_either_affine_tensor_alone(give: str) -> None:
     """weight and bias are independent, as in ``torch.nn.functional.group_norm``."""
-    test = GroupNormTest(2, 32, (8, 8), 8, torch.float16)
-    x, weight, bias = test.gen_inputs()
+    workload = GroupNormWorkload(2, 32, (8, 8), 8, torch.float16)
+    x, weight, bias = workload.gen_inputs()
     inputs = (x, weight) if give == "weight" else (x, None, bias)
-    test.check(GroupNormFwdOp(num_groups=8), *inputs)
+    check(workload, GroupNormFwdOp(num_groups=8), *inputs)
 
 
 @pytest.mark.parametrize(
@@ -393,9 +380,9 @@ def test_group_norm_takes_either_affine_tensor_alone(give: str) -> None:
 )
 def test_group_norm_no_affine_tail_block(n: int, c: int, spatial: tuple, g: int) -> None:
     """No-affine GroupNorm handles a row count smaller than one grid block."""
-    test = GroupNormTest(n, c, spatial, g, torch.float16)
-    x, _, _ = test.gen_inputs()
-    test.check(GroupNormFwdOp(num_groups=g), x)
+    workload = GroupNormWorkload(n, c, spatial, g, torch.float16)
+    x, _, _ = workload.gen_inputs()
+    check(workload, GroupNormFwdOp(num_groups=g), x)
 
 
 @pytest.mark.parametrize(
@@ -405,25 +392,25 @@ def test_group_norm_no_affine_tail_block(n: int, c: int, spatial: tuple, g: int)
 def test_group_norm_under_tuning(tune: bool) -> None:
     """A group of 8192 elements, past the register-held row, where multi-row blocks are
     candidates."""
-    test = GroupNormTest(2, 32, (32, 32), 4, torch.float16)
+    workload = GroupNormWorkload(2, 32, (32, 32), 4, torch.float16)
     op = GroupNormFwdOp(num_groups=4)
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_group_norm_constant_group() -> None:
     """A group of equal elements normalizes to zero, at a width the row is cut across blocks."""
-    test = GroupNormTest(1, 32, (4096,), 1, torch.float16)
-    x, _, _ = test.gen_inputs()
-    test.check(GroupNormFwdOp(num_groups=1), torch.full_like(x, 10000.0))
+    workload = GroupNormWorkload(1, 32, (4096,), 1, torch.float16)
+    x, _, _ = workload.gen_inputs()
+    check(workload, GroupNormFwdOp(num_groups=1), torch.full_like(x, 10000.0))
 
 
 @pytest.mark.smoke
 @pytest.mark.parametrize("affine", [True, False], ids=["affine", "no-affine"])
 def test_group_norm_reads_inputs_off_the_vector_boundary(affine: bool) -> None:
     """A contiguous input, weight and bias may start anywhere in their storage."""
-    test = GroupNormTest(2, 32, (16, 16), 8, torch.float16)
-    x, weight, bias = (misaligned(t) for t in test.gen_inputs())
-    test.check(GroupNormFwdOp(num_groups=8), *((x, weight, bias) if affine else (x,)))
+    workload = GroupNormWorkload(2, 32, (16, 16), 8, torch.float16)
+    x, weight, bias = (misaligned(t) for t in workload.gen_inputs())
+    check(workload, GroupNormFwdOp(num_groups=8), *((x, weight, bias) if affine else (x,)))

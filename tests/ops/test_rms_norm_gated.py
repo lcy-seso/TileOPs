@@ -4,19 +4,10 @@ import pytest
 import torch
 
 from tests.cuda_graph_contract import check_replay
-from tests.workload_test_base import TestBase, smoke_first
+from tests.workload_test_base import check, smoke_first
 from tileops.norm import RMSNormGatedFwdOp
 from workloads.norm import RMSNormGatedCall, RMSNormGatedTinyGateCall
 from workloads.workload_base import manifest_call
-
-
-class RMSNormGatedTest(RMSNormGatedCall, TestBase):
-    pass
-
-
-class RMSNormGatedTinyGateTest(RMSNormGatedTinyGateCall, TestBase):
-    pass
-
 
 _SMOKE = pytest.mark.smoke
 _FULL = pytest.mark.full
@@ -123,9 +114,9 @@ def test_rms_norm_gated(leading, n, dtypes, some, params) -> None:
     for name in some:
         row.pop(name)
     call = manifest_call("RMSNormGatedFwdOp", dtypes, B=leading, N=n, some=some, **row)
-    test = RMSNormGatedTest(call)
+    workload = RMSNormGatedCall(call)
     op = RMSNormGatedFwdOp(**call.arguments())
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 def _laid_out(t: torch.Tensor, layout: tuple, heads: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -194,8 +185,8 @@ def test_rms_norm_gated_reads_strided_rows(leading, n, group_size, heads, x_layo
     call = manifest_call(
         "RMSNormGatedFwdOp", _BF16, B=leading, N=n, some=["z"], bias=None, group_size=group_size
     )
-    test = RMSNormGatedTest(call)
-    x, weight, bias, z = test.gen_inputs()
+    workload = RMSNormGatedCall(call)
+    x, weight, bias, z = workload.gen_inputs()
     x, x_storage = _laid_out(x, x_layout, heads)
     z, z_storage = _laid_out(z, z_layout, heads)
     before = x_storage.clone(), z_storage.clone()
@@ -206,7 +197,7 @@ def test_rms_norm_gated_reads_strided_rows(leading, n, group_size, heads, x_layo
         assert torch.equal(x_storage, before[0]) and torch.equal(z_storage, before[1])
         return out
 
-    test.check(op, x, weight, bias, z, runs=run)
+    check(workload, op, x, weight, bias, z, runs=run)
 
 
 @pytest.mark.parametrize(
@@ -226,8 +217,8 @@ def test_rms_norm_gated_keeps_a_tiny_gate(activation) -> None:
         norm_before_gate=False,
         activation=activation,
     )
-    test = RMSNormGatedTinyGateTest(call)
-    test.check(RMSNormGatedFwdOp(**call.arguments()), *test.gen_inputs())
+    workload = RMSNormGatedTinyGateCall(call)
+    check(workload, RMSNormGatedFwdOp(**call.arguments()), *workload.gen_inputs())
 
 
 @pytest.mark.sm90
@@ -239,4 +230,4 @@ def test_rms_norm_gated_graph_replay() -> None:
     call = manifest_call(
         "RMSNormGatedFwdOp", _BF16, B=[1], N=6144, some=["z"], bias=None, group_size=128
     )
-    check_replay(RMSNormGatedTest(call), RMSNormGatedFwdOp(**call.arguments()))
+    check_replay(RMSNormGatedCall(call), RMSNormGatedFwdOp(**call.arguments()))

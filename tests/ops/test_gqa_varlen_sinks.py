@@ -5,7 +5,7 @@ import torch
 
 from tests.compile_contract import assert_op_owns_graph_nodes
 from tests.cuda_graph_contract import check_replay
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops.attention import GQAVarlenFwdOp
 from workloads.attention.gqa.varlen import GQAVarlenSinkWorkload
 
@@ -187,7 +187,7 @@ from workloads.attention.gqa.varlen import GQAVarlenSinkWorkload
 def test_varlen_sinks(dtype, dim, q_lens, kv_lens, options):
     """Normalize per-head sinks across the supported attention paths."""
     w, op = _sink_case(dtype, dim, q_lens, kv_lens, options)
-    TestBase.check(w, op, *w.gen_inputs())
+    check(w, op, *w.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -210,7 +210,7 @@ def test_varlen_fp8_empty_rows(_architecture, heads, has_sinks):
     inputs = list(w.gen_inputs())
     if not has_sinks:
         inputs[-1] = None
-    TestBase.check(w, op, *inputs)
+    check(w, op, *inputs)
 
 
 def _sink_case(dtype, dim, q_lens, kv_lens, options):
@@ -250,7 +250,7 @@ def test_varlen_sinks_compile():
     w, op = _sink_case(torch.float16, 128, [129, 1, 0, 17], [257, 33, 0, 17], {})
     inputs = w.gen_inputs()
     assert_op_owns_graph_nodes(op, *inputs)
-    TestBase.check(w, op, *inputs, runs=torch.compile(op, fullgraph=True))
+    check(w, op, *inputs, runs=torch.compile(op, fullgraph=True))
 
 
 @pytest.mark.smoke

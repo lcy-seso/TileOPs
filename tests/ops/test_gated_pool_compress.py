@@ -5,7 +5,7 @@ import pytest
 import torch
 
 from tests.cuda_graph_contract import check_replay
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops.attention import GatedPoolCompressFwdOp
 from workloads.attention.gated_pool_compress import (
     GatedPoolCompressFwdCall,
@@ -16,15 +16,7 @@ from workloads.device import run_device
 from workloads.workload_base import manifest_call
 
 
-class GatedPoolCompressFwdTest(GatedPoolCompressFwdCall, TestBase):
-    pass
-
-
-class GatedPoolCompressStridedTest(GatedPoolCompressStridedCall, TestBase):
-    pass
-
-
-def _test(dtype, *, dim, ratio, overlap, seq_lens, positions, slots=8):
+def _workload(dtype, *, dim, ratio, overlap, seq_lens, positions, slots=8):
     call = manifest_call(
         "GatedPoolCompressFwdOp",
         {"T": str(dtype).removeprefix("torch.")},
@@ -36,12 +28,17 @@ def _test(dtype, *, dim, ratio, overlap, seq_lens, positions, slots=8):
         seq_lens=seq_lens,
         positions=positions,
     )
-    return GatedPoolCompressFwdTest(call)
+    return GatedPoolCompressFwdCall(call)
 
 
-def _check(test):
-    op = GatedPoolCompressFwdOp(**test.arguments())
-    test.check(op, *test.gen_inputs(), runs=lambda *args: gated_pool_compress_result(op, *args))
+def _check(workload):
+    op = GatedPoolCompressFwdOp(**workload.arguments())
+    check(
+        workload,
+        op,
+        *workload.gen_inputs(),
+        runs=lambda *args: gated_pool_compress_result(op, *args),
+    )
 
 
 @pytest.mark.parametrize(
@@ -167,7 +164,9 @@ def test_gated_pool_compress_matches_reference(
     positions: list,
 ) -> None:
     _check(
-        _test(dtype, dim=dim, ratio=ratio, overlap=overlap, seq_lens=seq_lens, positions=positions)
+        _workload(
+            dtype, dim=dim, ratio=ratio, overlap=overlap, seq_lens=seq_lens, positions=positions
+        )
     )
 
 
@@ -254,21 +253,28 @@ def test_gated_pool_compress_reads_strided_rows(
     """``kv`` and ``score`` whose rows lie apart from their channels' width, read where they
     lie: wider apart, off a lane's vector, or all at one address; and whose channels lie apart,
     read through a contiguous copy."""
-    call = _test(
+    call = _workload(
         dtype, dim=dim, ratio=ratio, overlap=overlap, seq_lens=seq_lens, positions=positions
     ).call
-    _check(GatedPoolCompressStridedTest(call, layout))
+    _check(GatedPoolCompressStridedCall(call, layout))
 
 
 @pytest.mark.smoke
 def test_gated_pool_compress_builds_a_program_for_each_row_stride() -> None:
     """One op called on contiguous rows, then on the column halves of one projection, then on
     contiguous rows again: each call runs the program of its own row strides."""
-    call = _test(torch.float32, dim=512, ratio=4, overlap=True, seq_lens=[67], positions=[0]).call
-    contiguous = GatedPoolCompressFwdTest(call)
+    call = _workload(
+        torch.float32, dim=512, ratio=4, overlap=True, seq_lens=[67], positions=[0]
+    ).call
+    contiguous = GatedPoolCompressFwdCall(call)
     op = GatedPoolCompressFwdOp(**contiguous.arguments())
-    for test in (contiguous, GatedPoolCompressStridedTest(call, "halves"), contiguous):
-        test.check(op, *test.gen_inputs(), runs=lambda *args: gated_pool_compress_result(op, *args))
+    for workload in (contiguous, GatedPoolCompressStridedCall(call, "halves"), contiguous):
+        check(
+            workload,
+            op,
+            *workload.gen_inputs(),
+            runs=lambda *args: gated_pool_compress_result(op, *args),
+        )
 
 
 @pytest.mark.parametrize(
@@ -285,7 +291,7 @@ def test_gated_pool_compress_finds_each_window_among_many_requests(
     is found among more candidates than a warp tests at once."""
     n = 40
     _check(
-        _test(
+        _workload(
             torch.float32,
             dim=64,
             ratio=ratio,
@@ -302,7 +308,7 @@ def test_gated_pool_compress_reads_a_ring_row_its_later_token_writes() -> None:
     """Two tokens a request, the first closing a window that reads the ring row the second
     token's position takes: the window reads the row before the call writes it."""
     _check(
-        _test(
+        _workload(
             torch.float32,
             dim=128,
             ratio=4,
@@ -507,10 +513,10 @@ def test_gated_pool_compress_graph_replay(dim: int, ratio: int, overlap: bool) -
     """DeepSeek-V4-Flash's decode pooling of a token's float32 kv and score into its ring, at a
     position that closes a window. The replay holds the packing and the ring slot, which a
     request of one token cannot change."""
-    test = _test(
+    workload = _workload(
         torch.float32, dim=dim, ratio=ratio, overlap=overlap, seq_lens=[1], positions=[1], slots=1
     )
-    inputs = test.gen_inputs()
+    inputs = workload.gen_inputs()
     inputs[6].fill_(4096 - 1)
-    op = GatedPoolCompressFwdOp(**test.arguments())
-    check_replay(test, op, inputs, held=(5, 7), result=gated_pool_compress_result)
+    op = GatedPoolCompressFwdOp(**workload.arguments())
+    check_replay(workload, op, inputs, held=(5, 7), result=gated_pool_compress_result)

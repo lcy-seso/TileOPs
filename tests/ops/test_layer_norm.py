@@ -15,7 +15,7 @@ from tests.ops.layer_norm_helpers import (
     outlier_rows,
     warp_leads,
 )
-from tests.workload_test_base import FixtureBase, TestBase, op_preferring, smoke_first
+from tests.workload_test_base import FixtureBase, check, op_preferring, smoke_first
 from tileops._kernels.constants import SM90_REGISTERS
 from tileops._kernels.norm import (
     FusedAddLayerNormHeldKernel,
@@ -42,10 +42,6 @@ from workloads.norm import (
     normalization_verification,
 )
 from workloads.numerics import compare_outputs
-
-
-class LayerNormTest(LayerNormWorkload, TestBase):
-    pass
 
 
 class LayerNormFixture(FixtureBase):
@@ -82,11 +78,11 @@ class LayerNormFixture(FixtureBase):
 
 @LayerNormFixture
 def test_layer_norm_op(m: int, n: int, dtype: torch.dtype, tune: bool) -> None:
-    test = LayerNormTest(m, n, dtype)
+    workload = LayerNormWorkload(m, n, dtype)
     op = LayerNormFwdOp(normalized_shape=(n,))
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -97,7 +93,7 @@ def test_layer_norm_tunes_after_a_failed_first_build(monkeypatch) -> None:
     n = 16384
     op = LayerNormFwdOp(normalized_shape=(n,))
     # Bound first with fp32, so the failing fp16 entry keeps the op's entry table.
-    warm = LayerNormTest(1, n, torch.float32)
+    warm = LayerNormWorkload(1, n, torch.float32)
     op(*warm.gen_inputs())
     build = layer_norm_kernel_module._layer_norm_kernel
     failures = [RuntimeError("injected compile failure")]
@@ -113,14 +109,14 @@ def test_layer_norm_tunes_after_a_failed_first_build(monkeypatch) -> None:
         return compile_once
 
     monkeypatch.setattr(layer_norm_kernel_module, "_layer_norm_kernel", fails_to_compile)
-    test = LayerNormTest(2048, n, torch.float16)
+    workload = LayerNormWorkload(2048, n, torch.float16)
     with pytest.raises(RuntimeError, match="injected compile failure"):
-        op(*test.gen_inputs())
+        op(*workload.gen_inputs())
     op.request_tune()
-    op(*test.gen_inputs())
+    op(*workload.gen_inputs())
     (kernel,) = [k for k in op.iter_kernels() if k.dtype == torch.float16]
     assert kernel.config["threads"] is not None
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -129,9 +125,9 @@ def test_layer_norm_kernel_handles_unaligned_shape() -> None:
     """The kernel, not the Op layer, owns non-aligned boundary handling."""
     m, n = 16, 3000
     dtype = torch.float16
-    test = LayerNormTest(m, n, dtype)
-    op = LayerNormFwdOp(normalized_shape=(n,), eps=test.eps, target=BUILTIN)
-    test.check(op, *test.gen_inputs())
+    workload = LayerNormWorkload(m, n, dtype)
+    op = LayerNormFwdOp(normalized_shape=(n,), eps=workload.eps, target=BUILTIN)
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -150,10 +146,6 @@ def test_layer_norm_views(view: str, dtype: torch.dtype) -> None:
     expected = F.layer_norm(x.float(), (n,), weight.float(), bias.float(), eps=1e-5)
     y = LayerNormFwdOp(normalized_shape=(n,))(x, weight, bias)
     compare_outputs(y, expected.to(dtype), layer_norm_verification(dtype))
-
-
-class LayerNormFarFromZeroTest(LayerNormFarFromZeroWorkload, TestBase):
-    pass
 
 
 _F32_ROWS = ["constant", "noisy", "huge", "wide_spread"]
@@ -200,15 +192,11 @@ _LAYER_NORM_KERNELS = {
 @pytest.mark.in_tree_kernels
 @pytest.mark.parametrize("rows, n, kernel, dtype, row", _LAYER_NORM_FAR_CASES)
 def test_layer_norm_normalizes_rows_far_from_zero(rows, n, kernel, dtype, row) -> None:
-    test = LayerNormFarFromZeroTest(outlier_rows(rows), n, dtype, row=row)
+    workload = LayerNormFarFromZeroWorkload(outlier_rows(rows), n, dtype, row=row)
     op = LayerNormFwdOp(normalized_shape=(n,))
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     (built,) = op.iter_kernels()
     assert type(built) is _LAYER_NORM_KERNELS[kernel]
-
-
-class LayerNormOutlierLeadTest(LayerNormOutlierLeadWorkload, TestBase):
-    pass
 
 
 class _WideHeld(LayerNormHeldKernel):
@@ -245,11 +233,11 @@ def test_layer_norm_normalizes_rows_with_an_outlier_lead(rows, n, kernel, leads)
     if kernel != "warp":
         check_held_launch(LayerNormHeldKernel, kernel, m, n, dtype)
     positions = (0,) if leads == "row" else warp_leads(LayerNormHeldKernel, m, n, dtype)
-    test = LayerNormOutlierLeadTest(m, n, dtype, leads=positions)
+    workload = LayerNormOutlierLeadWorkload(m, n, dtype, leads=positions)
     op = LayerNormFwdOp(normalized_shape=(n,))
-    inputs = test.gen_inputs()
+    inputs = workload.gen_inputs()
     assert_raw_sums_fail(inputs[0])
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
     (built,) = op.iter_kernels()
     assert type(built) is _LAYER_NORM_KERNELS.get(kernel, LayerNormHeldKernel)
 
@@ -266,11 +254,11 @@ def test_layer_norm_held_kernel_leaves_warps_empty_and_normalizes_an_outlier_lea
     # 1024 threads take at most 750 accesses of a 3000-wide fp32 row: the last warps hold
     # nothing, and the merges must leave them out.
     op = op_preferring(LayerNormFwdOp, "layer_norm_held_wide", _WideHeld, normalized_shape=(n,))
-    test = LayerNormOutlierLeadTest(outlier_rows(rows), n, torch.float32, leads=(0,))
-    test.check(op, *test.gen_inputs())
+    workload = LayerNormOutlierLeadWorkload(outlier_rows(rows), n, torch.float32, leads=(0,))
+    check(workload, op, *workload.gen_inputs())
     (built,) = op.iter_kernels()
     assert isinstance(built, _WideHeld)
-    cluster = built._cluster(n, torch.float32, test.m, get_sm_version(), get_sm_count())
+    cluster = built._cluster(n, torch.float32, workload.m, get_sm_version(), get_sm_count())
     accesses = n // cluster // built._vec(n, torch.float32, cluster)
     assert accesses <= 1024 - WARP_LANES
 
@@ -320,10 +308,10 @@ def test_layer_norm_fragment_normalizes_rows_far_from_zero_without_the_walk(row)
     op = op_preferring(LayerNormFwdOp, "layer_norm_unwalked", Unwalked, normalized_shape=(n,))
     m = 2 * get_sm_count()
     if row == "lead":
-        test = LayerNormOutlierLeadTest(m, n, torch.float32, leads=(0,))
+        workload = LayerNormOutlierLeadWorkload(m, n, torch.float32, leads=(0,))
     else:
-        test = LayerNormFarFromZeroTest(m, n, torch.float32, row=row)
-    test.check(op, *test.gen_inputs())
+        workload = LayerNormFarFromZeroWorkload(m, n, torch.float32, row=row)
+    check(workload, op, *workload.gen_inputs())
     (built,) = op.iter_kernels()
     assert isinstance(built, Unwalked)
     assert built.config["threads"] == 256
@@ -405,10 +393,6 @@ def test_layer_norm_reads_inputs_off_the_vector_boundary(n: int) -> None:
     )
 
 
-class FusedAddLayerNormTest(FusedAddLayerNormWorkload, TestBase):
-    pass
-
-
 class FusedAddLayerNormFixture(FixtureBase):
     PARAMS = [
         (
@@ -434,13 +418,13 @@ class FusedAddLayerNormFixture(FixtureBase):
 
 @FusedAddLayerNormFixture
 def test_fused_add_layer_norm_op(m: int, n: int, dtype: torch.dtype, tune: bool) -> None:
-    test = FusedAddLayerNormTest(m, n, dtype)
+    workload = FusedAddLayerNormWorkload(m, n, dtype)
     op = FusedAddLayerNormFwdOp()
     if tune:
         op.request_tune()
         # The first call tunes and returns the untuned result; the check reads the tuned one.
-        op(*test.gen_inputs())
-    test.check(op, *test.gen_inputs())
+        op(*workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 def _fused_add_launch(op: FusedAddLayerNormFwdOp, m: int) -> tuple:
@@ -467,20 +451,16 @@ def test_fused_add_layer_norm_launch_follows_the_row(n, launches) -> None:
     dtype = torch.bfloat16
     op = FusedAddLayerNormFwdOp()
     for m in launches:
-        test = FusedAddLayerNormTest(m, n, dtype)
-        test.check(op, *test.gen_inputs())
+        workload = FusedAddLayerNormWorkload(m, n, dtype)
+        check(workload, op, *workload.gen_inputs())
     sm90 = get_sm_version() >= 90
     for m, (on_sm90, elsewhere) in launches.items():
         assert _fused_add_launch(op, m) == (on_sm90 if sm90 else elsewhere)
 
 
-class FusedAddLayerNormVanishingResidualTest(FusedAddLayerNormVanishingResidualWorkload, TestBase):
-    pass
-
-
 @pytest.mark.in_tree_kernels
 @pytest.mark.parametrize(
-    "rows_per_sm, n, dtype, held, workload",
+    "rows_per_sm, n, dtype, held, workload_cls",
     [
         # Queued rows past a thread's registers: the fragment kernel, normalizing the rounded
         # sum (a residual the bf16 rounding drops leaves no offset)
@@ -489,22 +469,22 @@ class FusedAddLayerNormVanishingResidualTest(FusedAddLayerNormVanishingResidualW
             12288,
             torch.bfloat16,
             False,
-            FusedAddLayerNormVanishingResidualTest,
+            FusedAddLayerNormVanishingResidualWorkload,
             marks=pytest.mark.smoke,
         ),
         # Past the registers but no CTA queued: the held kernel
         pytest.param(
-            0.5, 32768, torch.float32, True, FusedAddLayerNormTest, marks=pytest.mark.smoke
+            0.5, 32768, torch.float32, True, FusedAddLayerNormWorkload, marks=pytest.mark.smoke
         ),
     ],
 )
 def test_fused_add_layer_norm_takes_the_fragment_kernel_past_the_registers(
-    rows_per_sm, n, dtype, held, workload
+    rows_per_sm, n, dtype, held, workload_cls
 ) -> None:
     m = int(rows_per_sm * get_sm_count())
     op = FusedAddLayerNormFwdOp()
-    test = workload(m, n, dtype)
-    test.check(op, *test.gen_inputs())
+    workload = workload_cls(m, n, dtype)
+    check(workload, op, *workload.gen_inputs())
     (kernel,) = op.iter_kernels()
     assert isinstance(kernel, FusedAddLayerNormHeldKernel) == held
 
@@ -518,7 +498,7 @@ def test_fused_add_layer_norm_tunes_from_the_rule(monkeypatch) -> None:
     op = FusedAddLayerNormFwdOp()
     builders = []
     for m in (1, 2048):
-        op(*FusedAddLayerNormTest(m, n, dtype).gen_inputs())
+        op(*FusedAddLayerNormWorkload(m, n, dtype).gen_inputs())
         (kernel,) = op.iter_kernels()
         builders.append(kernel.kernel)
     assert builders[0] is not builders[1]
@@ -546,13 +526,9 @@ def test_fused_add_layer_norm_tunes_from_the_rule(monkeypatch) -> None:
     published = op.kernel_config()["threads"]
     assert published is not None
     for m in (1, 2048):
-        test = FusedAddLayerNormTest(m, n, dtype)
-        test.check(op, *test.gen_inputs())
+        workload = FusedAddLayerNormWorkload(m, n, dtype)
+        check(workload, op, *workload.gen_inputs())
         assert _fused_add_launch(op, m)[1] == published
-
-
-class FusedAddLayerNormFarRowTest(FusedAddLayerNormFarRowWorkload, TestBase):
-    pass
 
 
 # (rows, or rows an SM when a float, n, kernel): "held" holds a row in registers, read in
@@ -604,16 +580,12 @@ def test_fused_add_layer_norm_normalizes_rows_far_from_zero(rows, n, kernel, dty
     m = outlier_rows(rows)
     check_held_launch(FusedAddLayerNormHeldKernel, kernel, m, n, dtype)
     op = FusedAddLayerNormFwdOp()
-    test = FusedAddLayerNormFarRowTest(m, n, dtype, row)
-    test.check(op, *test.gen_inputs())
+    workload = FusedAddLayerNormFarRowWorkload(m, n, dtype, row)
+    check(workload, op, *workload.gen_inputs())
     (built,) = op.iter_kernels()
     assert isinstance(built, FusedAddLayerNormHeldKernel) == (kernel != "fragment")
     if kernel in ("split", "queued-split") and get_sm_version() >= 90:
         assert _fused_add_launch(op, m)[0] > 1
-
-
-class FusedAddLayerNormOutlierLeadTest(FusedAddLayerNormOutlierLeadWorkload, TestBase):
-    pass
 
 
 # (rows, or rows an SM when a float, n, kernel, leads), as `_LAYER_NORM_OUTLIER_CASES`:
@@ -635,10 +607,10 @@ def test_fused_add_layer_norm_normalizes_rows_with_an_outlier_lead(rows, n, kern
     check_held_launch(FusedAddLayerNormHeldKernel, kernel, m, n, dtype)
     positions = (0,) if leads == "row" else warp_leads(FusedAddLayerNormHeldKernel, m, n, dtype)
     op = FusedAddLayerNormFwdOp()
-    test = FusedAddLayerNormOutlierLeadTest(m, n, dtype, positions)
-    inputs = test.gen_inputs()
+    workload = FusedAddLayerNormOutlierLeadWorkload(m, n, dtype, positions)
+    inputs = workload.gen_inputs()
     assert_raw_sums_fail(inputs[0] + inputs[1])
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
     (built,) = op.iter_kernels()
     held = kernel != "fragment"
     assert type(built) is (FusedAddLayerNormHeldKernel if held else FusedAddLayerNormKernel)
@@ -654,7 +626,7 @@ def test_fused_add_layer_norm_exchanges_share_no_bytes(rows, n) -> None:
     # Only SM90 splits a row across a cluster, so only there is a peer.
     m = outlier_rows(rows)
     op = FusedAddLayerNormFwdOp()
-    op(*FusedAddLayerNormTest(m, n, torch.float32).gen_inputs())
+    op(*FusedAddLayerNormWorkload(m, n, torch.float32).gen_inputs())
     (kernel,) = op.iter_kernels()
     (key,) = [key for key in kernel._generation.programs if key[1] == m]
     source = kernel._generation.programs[key].get_kernel_source()
@@ -678,8 +650,8 @@ def test_fused_add_layer_norm_views(view: str, dtype: torch.dtype) -> None:
         residual = torch.randn(2, 512, n, dtype=dtype, device=run_device())
     weight = torch.randn(n, dtype=dtype, device=run_device())
     bias = torch.randn(n, dtype=dtype, device=run_device())
-    test = FusedAddLayerNormTest(x.numel() // n, n, dtype)
-    y_ref, add_ref = test.ref_program(x.contiguous(), residual.contiguous(), weight, bias)
+    workload = FusedAddLayerNormWorkload(x.numel() // n, n, dtype)
+    y_ref, add_ref = workload.ref_program(x.contiguous(), residual.contiguous(), weight, bias)
     y, residual_out = FusedAddLayerNormFwdOp()(x, residual, weight, bias)
     verification = normalization_verification("FusedAddLayerNormFwdOp", dtype)
     compare_outputs(y, y_ref, verification)
@@ -689,5 +661,5 @@ def test_fused_add_layer_norm_views(view: str, dtype: torch.dtype) -> None:
 @pytest.mark.smoke
 def test_fused_add_layer_norm_reads_inputs_off_the_vector_boundary() -> None:
     """A contiguous input, residual, weight and bias may start anywhere in their storage."""
-    test = FusedAddLayerNormTest(4, 1024, torch.float16)
-    test.check(FusedAddLayerNormFwdOp(), *(misaligned(t) for t in test.gen_inputs()))
+    workload = FusedAddLayerNormWorkload(4, 1024, torch.float16)
+    check(workload, FusedAddLayerNormFwdOp(), *(misaligned(t) for t in workload.gen_inputs()))

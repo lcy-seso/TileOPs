@@ -5,7 +5,7 @@ device; an implementation that cannot run is refused when a kernel is first sele
 import pytest
 import torch
 
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops._ops.elementwise import AlibiFwdOp, SinusoidalFwdOp
 from tileops._ops.elementwise._base import ELEMENTWISE
 from tileops._utils import forget_device_properties, get_sm_version
@@ -99,7 +99,7 @@ def test_a_kernel_declaring_no_supported_archs_runs_anywhere() -> None:
     op = cls(target=BUILTIN)
     x = torch.randn(8, device=run_device(), dtype=torch.float16)
 
-    TestBase.check(ElementwiseWorkload("ReLUFwdOp", (x,)), op, x)
+    check(ElementwiseWorkload("ReLUFwdOp", (x,)), op, x)
     ((built,),) = [tuple(op._entries_built(ELEMENTWISE).values())]
     assert isinstance(built, UnrestrictedKernel), "the added implementation is what got built"
 
@@ -132,7 +132,7 @@ def test_a_bool_call_takes_the_key_preferred_over_the_general_one():
     op = BitwiseAndFwdOp(target=BUILTIN)
     x = torch.tensor([True, False] * 32, device=run_device())
 
-    TestBase.check(ElementwiseWorkload("BitwiseAndFwdOp", (x, ~x)), op, x, ~x)
+    check(ElementwiseWorkload("BitwiseAndFwdOp", (x, ~x)), op, x, ~x)
     ((built,),) = [tuple(op._entries_built(ELEMENTWISE).values())]
     assert isinstance(built, NativeBoolAnd)
     assert built.ctor_dtype == torch.bool, "the op imposed a storage dtype"
@@ -147,8 +147,8 @@ def test_an_integral_call_takes_the_key_that_states_it_serves_integers():
     ints = torch.arange(1, 65, device=run_device(), dtype=torch.int32)
     floats = torch.randn(64, device=run_device(), dtype=torch.float32)
 
-    TestBase.check(ElementwiseWorkload("FloorFwdOp", (ints,)), op, ints)
-    TestBase.check(ElementwiseWorkload("FloorFwdOp", (floats,)), op, floats)
+    check(ElementwiseWorkload("FloorFwdOp", (ints,)), op, ints)
+    check(ElementwiseWorkload("FloorFwdOp", (floats,)), op, floats)
 
 
 @pytest.mark.smoke

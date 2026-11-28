@@ -12,7 +12,7 @@ from tests.state_pool_guard import (
     check_strided_pool_in_place,
     pooled_call,
 )
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops._kernels.kernel_base import Kernel
 from tileops._kernels.linear_attention import (
     KDACall,
@@ -30,13 +30,9 @@ from workloads.numerics import compare_outputs
 from workloads.workload_base import manifest_call
 
 
-class KDAFwdTest(KDAFwdWorkload, TestBase):
-    pass
-
-
 def _check(*args, **kwargs):
-    test = KDAFwdTest(*args, **kwargs)
-    test.check(KDAFwdOp(use_qk_l2norm_in_kernel=True), *test.gen_inputs())
+    workload = KDAFwdWorkload(*args, **kwargs)
+    check(workload, KDAFwdOp(use_qk_l2norm_in_kernel=True), *workload.gen_inputs())
 
 
 @pytest.fixture
@@ -172,15 +168,15 @@ def test_kda_decode_keeps_a_state_near_the_fp32_limit_finite(state_v_first: bool
         "KDAFwdOp", {"T": "bfloat16"}, some=["initial_state"], B=4, S=1, H=4, HV=4, K=128,
         V=128, **flags,
     )  # fmt: skip
-    test = KDAFwdCallTest(call)
-    q, k, v, g, beta, state, *rest = test.gen_inputs()
+    workload = KDAFwdCall(call)
+    q, k, v, g, beta, state, *rest = workload.gen_inputs()
     q.fill_(1.0)
     k.fill_(1.0)
     v.zero_()
     g.zero_()
     beta.fill_(0.5)
     state.fill_(1e37)
-    test.check(KDAFwdOp(**flags), q, k, v, g, beta, state, *rest)
+    check(workload, KDAFwdOp(**flags), q, k, v, g, beta, state, *rest)
 
 
 @pytest.mark.smoke
@@ -191,13 +187,13 @@ def test_kda_value_major_decode_keeps_a_scaled_output_finite_without_l2norm() ->
         "KDAFwdOp", {"T": "bfloat16"}, some=["initial_state"], B=4, S=1, H=4, HV=4, K=128,
         V=128, state_v_first=True,
     )  # fmt: skip
-    test = KDAFwdCallTest(call)
-    q, k, v, g, beta, state, *rest = test.gen_inputs()
+    workload = KDAFwdCall(call)
+    q, k, v, g, beta, state, *rest = workload.gen_inputs()
     q.fill_(1.0)
     k.zero_()
     g.zero_()
     state.fill_(1e37)
-    test.check(KDAFwdOp(state_v_first=True), q, k, v, g, beta, state, *rest)
+    check(workload, KDAFwdOp(state_v_first=True), q, k, v, g, beta, state, *rest)
 
 
 @pytest.mark.smoke
@@ -210,16 +206,16 @@ def test_kda_decode_runs_from_a_zero_state() -> None:
 def test_kda_prefill_continues_across_calls() -> None:
     """The state a prefill ends on is the one the next call starts from."""
     torch.manual_seed(42)
-    test = KDAFwdTest(1, 128, 4, 128, torch.bfloat16)
-    inputs = test.gen_inputs()
+    workload = KDAFwdWorkload(1, 128, 4, 128, torch.bfloat16)
+    inputs = workload.gen_inputs()
     q, k, v, g, beta, state = inputs
     op = KDAFwdOp(use_qk_l2norm_in_kernel=True)
     first_o, carried = op(q[:, :64], k[:, :64], v[:, :64], g[:, :64], beta[:, :64], state)
     second_o, final = op(q[:, 64:], k[:, 64:], v[:, 64:], g[:, 64:], beta[:, 64:], carried)
     compare_outputs(
         (torch.cat([first_o, second_o], dim=1), final),
-        test.ref_program(*inputs),
-        test.verification(*inputs),
+        workload.ref_program(*inputs),
+        workload.verification(*inputs),
     )
 
 
@@ -247,8 +243,8 @@ def test_kda_prefill_scans_independent_value_tiles() -> None:
 def test_kda_fused_prefill_reads_many_offsets_from_global_memory() -> None:
     """2048 sequences of four tokens: more boundaries than a block can stage."""
     torch.manual_seed(42)
-    test = KDAFwdTest(1, 0, 4, 128, torch.bfloat16, sequence_lengths=(4,) * 2048)
-    test.check(KDAFwdOp(use_qk_l2norm_in_kernel=True), *test.gen_inputs())
+    workload = KDAFwdWorkload(1, 0, 4, 128, torch.bfloat16, sequence_lengths=(4,) * 2048)
+    check(workload, KDAFwdOp(use_qk_l2norm_in_kernel=True), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -315,8 +311,8 @@ def test_kda_sm90_chunk_prefill_splits_the_preparation_of_raw_and_fp16_gates(
         "KDAFwdOp", {"T": name}, some=["A_log", "dt_bias"] if raw else [], B=1, S=256, H=4,
         HV=4, K=128, V=128, **flags,
     )  # fmt: skip
-    test = KDAFwdCallTest(call)
-    test.check(KDAFwdOp(**flags), *test.gen_inputs())
+    workload = KDAFwdCall(call)
+    check(workload, KDAFwdOp(**flags), *workload.gen_inputs())
     assert bool(built) == split
 
 
@@ -384,8 +380,8 @@ def test_kda_fused_prefill_in_sm89_shared_memory(dim, dtype):
     """16 sequences of 256 tokens over 16 value heads: enough blocks to cover an SM89 device,
     with output and carried state checked at each width."""
     torch.manual_seed(42)
-    test = KDAFwdTest(16, 256, 16, dim, dtype)
-    test.check(KDAFwdOp(use_qk_l2norm_in_kernel=True), *test.gen_inputs())
+    workload = KDAFwdWorkload(16, 256, 16, dim, dtype)
+    check(workload, KDAFwdOp(use_qk_l2norm_in_kernel=True), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -400,7 +396,7 @@ def test_kda_fused_prefill_in_sm89_shared_memory(dim, dtype):
 def test_kda_prefill_correlated_keys(dtype, batch, heads):
     """Repeated keys must not destabilize the inverse, including a partial chunk."""
     torch.manual_seed(42)
-    workload = KDAFwdTest(batch, 65, heads, 128, dtype)
+    workload = KDAFwdWorkload(batch, 65, heads, 128, dtype)
     q, k, v, g, beta, state = workload.gen_inputs()
     inputs = (
         q,
@@ -410,14 +406,10 @@ def test_kda_prefill_correlated_keys(dtype, batch, heads):
         torch.full_like(beta, 0.95),
         state,
     )
-    workload.check(KDAFwdOp(use_qk_l2norm_in_kernel=True), *inputs)
+    check(workload, KDAFwdOp(use_qk_l2norm_in_kernel=True), *inputs)
 
 
-class KDAFwdCallTest(KDAFwdCall, TestBase):
-    pass
-
-
-def _raw_gate_test(
+def _raw_gate_workload(
     batch,
     seqlen,
     dim,
@@ -429,7 +421,7 @@ def _raw_gate_test(
     l2norm=True,
     **shape,
 ):
-    """A raw-gate workload test and the op it checks."""
+    """A raw-gate workload and the op it checks."""
     call = manifest_call(
         "KDAFwdOp",
         {"T": dtype},
@@ -445,7 +437,7 @@ def _raw_gate_test(
         some=[*some, "A_log"],
         **shape,
     )
-    return KDAFwdCallTest(call), KDAFwdOp(**call.arguments())
+    return KDAFwdCall(call), KDAFwdOp(**call.arguments())
 
 
 @pytest.mark.parametrize(
@@ -488,7 +480,7 @@ def test_kda_raw_gate_matches_reference(
 ):
     """Raw gates preserve the recurrence across grouped heads, packed tails and saturation."""
     some = ["initial_state", "dt_bias"] + (["cu_seqlens", "cu_seqlens_cpu"] if packed else [])
-    test, op = _raw_gate_test(
+    workload, op = _raw_gate_workload(
         batch,
         seqlen,
         dim,
@@ -499,14 +491,14 @@ def test_kda_raw_gate_matches_reference(
         value_heads=value_heads,
         **({"seq_lens": [0, 1, 64]} if packed else {}),
     )
-    inputs = list(test.gen_inputs())
+    inputs = list(workload.gen_inputs())
     inputs[3] = (
         torch.linspace(-100, 100, dim, device=inputs[3].device)
         .to(inputs[3])
         .expand_as(inputs[3])
         .contiguous()
     )
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.sm90
@@ -524,8 +516,10 @@ def test_kda_raw_gate_graph_replay(seqlen, lower_bound):
     """Replay reads changed gates, dt_bias and initial state and overwrites both returned
     tensors. In the unbounded 65-token call two draws of dt_bias agree within the tolerance, so
     the replay lowers it by 1."""
-    test, op = _raw_gate_test(1, seqlen, 64, lower_bound, ["initial_state", "dt_bias"])
-    check_replay(test, op, [x - 1 if i == 9 else x for i, x in enumerate(test.gen_inputs())])
+    workload, op = _raw_gate_workload(1, seqlen, 64, lower_bound, ["initial_state", "dt_bias"])
+    check_replay(
+        workload, op, [x - 1 if i == 9 else x for i, x in enumerate(workload.gen_inputs())]
+    )
 
 
 @pytest.mark.smoke
@@ -536,25 +530,25 @@ def test_kda_raw_gate_takes_large_softplus_arguments_as_identity() -> None:
     log1p(exp(100)) would give an infinite decay that zeroes the carried state.
     """
     torch.manual_seed(42)
-    test, op = _raw_gate_test(1, 65, 64, None, ["initial_state"])
-    inputs = list(test.gen_inputs())
+    workload, op = _raw_gate_workload(1, 65, 64, None, ["initial_state"])
+    inputs = list(workload.gen_inputs())
     inputs[3].fill_(100.0)
     # A decay of -0.25 per token keeps the carried state visible across the call.
     inputs[8].fill_(math.log(0.0025))
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.smoke
 def test_kda_raw_gate_decode_reads_dt_bias() -> None:
     """Decode adds each channel's dt_bias to the raw gate before the softplus."""
     torch.manual_seed(42)
-    test, op = _raw_gate_test(4, 1, 64, None, ["initial_state", "dt_bias"])
-    inputs = list(test.gen_inputs())
+    workload, op = _raw_gate_workload(4, 1, 64, None, ["initial_state", "dt_bias"])
+    inputs = list(workload.gen_inputs())
     inputs[3].zero_()
     inputs[8].zero_()
     # Channel decays from -softplus(-3) to -softplus(3) instead of -log(2) for every channel.
     inputs[9].copy_(torch.linspace(-3.0, 3.0, 64, device=inputs[9].device).repeat(4))
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.smoke
@@ -565,18 +559,18 @@ def test_kda_raw_gate_decode_keeps_state_when_factors_cross_fp32_range() -> None
     the decay -1, is finite.
     """
     torch.manual_seed(42)
-    test, op = _raw_gate_test(8, 1, 128, None, ["initial_state"])
-    inputs = list(test.gen_inputs())
+    workload, op = _raw_gate_workload(8, 1, 128, None, ["initial_state"])
+    inputs = list(workload.gen_inputs())
     inputs[3].fill_(-88.0)
     inputs[8].fill_(88.0)
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.smoke
 def test_kda_bounded_gate_zero_gate_survives_overflowing_rate() -> None:
     """A zero raw gate has decay lower_bound / 2 even when exp(A_log) overflows FP32."""
     torch.manual_seed(42)
-    test, op = _raw_gate_test(
+    workload, op = _raw_gate_workload(
         1,
         65,
         128,
@@ -584,11 +578,11 @@ def test_kda_bounded_gate_zero_gate_survives_overflowing_rate() -> None:
         ["initial_state", "dt_bias", "cu_seqlens", "cu_seqlens_cpu"],
         seq_lens=[0, 1, 64],
     )
-    inputs = list(test.gen_inputs())
+    inputs = list(workload.gen_inputs())
     inputs[3].zero_()
     inputs[8].fill_(100.0)
     inputs[9].zero_()
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.parametrize(
@@ -607,8 +601,8 @@ def test_kda_raw_gate_serves_many_chunk_heads(batch, seqlen, lower_bound, seq_le
     """
     some = ["initial_state", "dt_bias"] + (["cu_seqlens", "cu_seqlens_cpu"] if seq_lens else [])
     shape = {"seq_lens": seq_lens} if seq_lens else {}
-    test, op = _raw_gate_test(batch, seqlen, 128, lower_bound, some, heads=8, **shape)
-    test.check(op, *test.gen_inputs())
+    workload, op = _raw_gate_workload(batch, seqlen, 128, lower_bound, some, heads=8, **shape)
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -641,25 +635,25 @@ def test_kda_gate_modes_and_operands_remain_call_local(batch, seqlen, heads):
             lower_bound=lower_bound,
             some=["initial_state"] + (["dt_bias"] if bias else []) + (["A_log"] if raw else []),
         )
-        test = KDAFwdCallTest(call)
-        inputs = list(test.gen_inputs())
+        workload = KDAFwdCall(call)
+        inputs = list(workload.gen_inputs())
         op = KDAFwdOp(**call.arguments())
-        test.check(op, *inputs)
+        check(workload, op, *inputs)
         if raw:
             inputs[8].add_(0.5)
             if bias:
                 inputs[9].add_(0.75)
-            test.check(op, *inputs)
+            check(workload, op, *inputs)
             if bias:
                 inputs[9] = None
-                test.check(op, *inputs)
+                check(workload, op, *inputs)
 
 
 @pytest.mark.smoke
 def test_kda_raw_gate_decode_continues_from_prefill() -> None:
     """Raw-gate decode consumes the FP32 state returned by raw-gate prefill."""
-    test, op = _raw_gate_test(1, 65, 64, None, ["initial_state", "dt_bias"])
-    inputs = test.gen_inputs()
+    workload, op = _raw_gate_workload(1, 65, 64, None, ["initial_state", "dt_bias"])
+    inputs = workload.gen_inputs()
     first = list(inputs[:-2])
     first[:5] = [tensor[:, :-1] for tensor in inputs[:5]]
     first_o, carried = op(*first)
@@ -669,8 +663,8 @@ def test_kda_raw_gate_decode_continues_from_prefill() -> None:
     second_o, final = op(*second)
     compare_outputs(
         (torch.cat((first_o, second_o), dim=1), final),
-        test.ref_program(*inputs),
-        test.verification(*inputs),
+        workload.ref_program(*inputs),
+        workload.verification(*inputs),
     )
 
 
@@ -683,10 +677,10 @@ def test_kda_raw_gate_decode_continues_from_prefill() -> None:
 )
 def test_kda_raw_gate_preserves_each_channel_decay(batch, heads) -> None:
     """Zero beta and diagonal state expose each channel's accumulated decay in every output."""
-    test, op = _raw_gate_test(
+    workload, op = _raw_gate_workload(
         batch, 64, 128, None, ["initial_state"], heads=heads, l2norm=False, scale=1.0
     )
-    inputs = list(test.gen_inputs())
+    inputs = list(workload.gen_inputs())
     inputs[0].fill_(1.0)
     inputs[1].zero_()
     inputs[2].zero_()
@@ -694,7 +688,7 @@ def test_kda_raw_gate_preserves_each_channel_decay(batch, heads) -> None:
     inputs[4].zero_()
     inputs[5].copy_(torch.eye(128, device=inputs[5].device))
     inputs[8].zero_()
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.parametrize(
@@ -706,8 +700,8 @@ def test_kda_raw_gate_preserves_each_channel_decay(batch, heads) -> None:
 )
 def test_kda_bounded_gate_preserves_tiny_query_contributions(batch, heads) -> None:
     """A tiny normalized query component retains a finite contribution from a large value."""
-    test, op = _raw_gate_test(batch, 64, 128, -5.0, heads=heads, scale=1.0)
-    inputs = list(test.gen_inputs())
+    workload, op = _raw_gate_workload(batch, 64, 128, -5.0, heads=heads, scale=1.0)
+    inputs = list(workload.gen_inputs())
     for index in (0, 1, 2, 4, 8):
         inputs[index].zero_()
     inputs[0][:, 15, :, 0] = 1e-30
@@ -716,7 +710,7 @@ def test_kda_bounded_gate_preserves_tiny_query_contributions(batch, heads) -> No
     inputs[2][:, 14, :, 0] = 1e35
     inputs[3].fill_(100.0)
     inputs[4][:, 14, :] = 1.0
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.parametrize(
@@ -728,8 +722,8 @@ def test_kda_bounded_gate_preserves_tiny_query_contributions(batch, heads) -> No
 )
 def test_kda_bounded_gate_preserves_near_cancelling_contributions(batch, heads) -> None:
     """Small channelwise gate differences preserve the finite residual of cancelling projections."""
-    test, op = _raw_gate_test(batch, 64, 128, -5.0, ["dt_bias"], heads=heads, scale=1.0)
-    inputs = list(test.gen_inputs())
+    workload, op = _raw_gate_workload(batch, 64, 128, -5.0, ["dt_bias"], heads=heads, scale=1.0)
+    inputs = list(workload.gen_inputs())
     for index in (0, 1, 2, 3, 4, 8, 9):
         inputs[index].zero_()
     inputs[0][:, 16, :, :2] = 1.0
@@ -738,14 +732,14 @@ def test_kda_bounded_gate_preserves_near_cancelling_contributions(batch, heads) 
     inputs[2][:, 15, :, 0] = 1e6
     inputs[4][:, 15, :] = 1.0
     inputs[9].view(heads, -1)[:, 1] = 1e-3
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.smoke
 def test_kda_raw_gate_preserves_finite_unnormalized_cancellation() -> None:
     """Large finite unnormalized operands retain a finite cancelling projection."""
-    test, op = _raw_gate_test(1, 64, 128, None, heads=1, l2norm=False, scale=1.0)
-    inputs = list(test.gen_inputs())
+    workload, op = _raw_gate_workload(1, 64, 128, None, heads=1, l2norm=False, scale=1.0)
+    inputs = list(workload.gen_inputs())
     for index in (0, 1, 2, 4, 8):
         inputs[index].zero_()
     inputs[0][0, 0, 0, 0] = 2.0**-63
@@ -755,14 +749,14 @@ def test_kda_raw_gate_preserves_finite_unnormalized_cancellation() -> None:
     inputs[0][0, 1, 0, 0::2] = 2.0**63
     inputs[0][0, 1, 0, 1::2] = -(2.0**63)
     inputs[3].fill_(-100.0)
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.smoke
 def test_kda_raw_gate_preserves_finite_state_cancellation() -> None:
     """Large finite state contributions retain a finite cancelling output."""
-    test, op = _raw_gate_test(32, 64, 128, None, scale=1.0)
-    inputs = list(test.gen_inputs())
+    workload, op = _raw_gate_workload(32, 64, 128, None, scale=1.0)
+    inputs = list(workload.gen_inputs())
     for index in (0, 1, 2, 4, 8):
         inputs[index].zero_()
     for token in range(16):
@@ -772,14 +766,14 @@ def test_kda_raw_gate_preserves_finite_state_cancellation() -> None:
     inputs[0][:, 0, :, 0] = 2.0**32
     inputs[0][:, 16, :, :16] = 2.0**32
     inputs[3].fill_(-100.0)
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.smoke
 def test_kda_raw_gate_preserves_finite_beta_correction() -> None:
     """A fractional beta retains a finite correction between large opposite values."""
-    test, op = _raw_gate_test(32, 64, 128, None, scale=1.0)
-    inputs = list(test.gen_inputs())
+    workload, op = _raw_gate_workload(32, 64, 128, None, scale=1.0)
+    inputs = list(workload.gen_inputs())
     for index in (0, 1, 2, 4, 8):
         inputs[index].zero_()
     inputs[0][:, :2, :, 0] = 2.0**32
@@ -789,14 +783,14 @@ def test_kda_raw_gate_preserves_finite_beta_correction() -> None:
     inputs[4][:, 0, :] = 1.0
     inputs[4][:, 1, :] = 0.5
     inputs[3].fill_(-100.0)
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.smoke
 def test_kda_bounded_gate_preserves_single_step_cancellation() -> None:
     """A single small gate difference retains the residual of two opposing channels."""
-    test, op = _raw_gate_test(1, 64, 128, -5.0, ["dt_bias"], heads=1, scale=1.0)
-    inputs = list(test.gen_inputs())
+    workload, op = _raw_gate_workload(1, 64, 128, -5.0, ["dt_bias"], heads=1, scale=1.0)
+    inputs = list(workload.gen_inputs())
     for index in (0, 1, 2, 4, 8, 9):
         inputs[index].zero_()
     inputs[0][0, 15, 0, 0] = 1.0
@@ -808,7 +802,7 @@ def test_kda_bounded_gate_preserves_single_step_cancellation() -> None:
     inputs[3].fill_(-100.0)
     inputs[3][0, 16, 0, 0] = 0.0
     inputs[3][0, 16, 0, 1] = 2.0**-19
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 def _strong_decays(dtype):
@@ -862,7 +856,7 @@ def test_kda_prefill_given_gate_mixes_ordinary_and_strong_chunks(
     reach the fused program on SM89 and the chunk program elsewhere.
     """
     torch.manual_seed(42)
-    workload = KDAFwdTest(
+    workload = KDAFwdWorkload(
         batch, 5 * 64 + 1, heads, dim, dtype, l2norm=l2norm, value_heads=value_heads
     )
     q, k, v, g, beta, state = workload.gen_inputs()
@@ -877,7 +871,7 @@ def test_kda_prefill_given_gate_mixes_ordinary_and_strong_chunks(
     if not l2norm:
         # Unit keys keep the delta rule contractive without the in-kernel normalization.
         q, k = (x / x.norm(dim=-1, keepdim=True) for x in (q, k))
-    workload.check(KDAFwdOp(use_qk_l2norm_in_kernel=l2norm), q, k, v, g, beta, state)
+    check(workload, KDAFwdOp(use_qk_l2norm_in_kernel=l2norm), q, k, v, g, beta, state)
 
 
 @pytest.mark.smoke
@@ -888,13 +882,22 @@ def test_kda_prefill_given_gate_centres_a_steady_decay_by_block() -> None:
     through every row: the outputs and final states of its whole chunks, its 50-row sequence
     and its 56-row tail depend on ``w`` and on the step sizes it carries."""
     torch.manual_seed(42)
-    workload = KDAFwdTest(1, 0, 4, 128, torch.bfloat16, sequence_lengths=(50, 120, 130))
+    workload = KDAFwdWorkload(1, 0, 4, 128, torch.bfloat16, sequence_lengths=(50, 120, 130))
     q, k, v, g, beta, state, offsets, host_offsets = workload.gen_inputs()
     channel = torch.arange(g.shape[-1], device=g.device)
     g = torch.where(channel % 2 == 0, -2.5 * math.log(2), 0.0).expand_as(g).to(g.dtype)
     state = state * 50.0
-    workload.check(
-        KDAFwdOp(use_qk_l2norm_in_kernel=True), q, k, v, g, beta, state, offsets, host_offsets
+    check(
+        workload,
+        KDAFwdOp(use_qk_l2norm_in_kernel=True),
+        q,
+        k,
+        v,
+        g,
+        beta,
+        state,
+        offsets,
+        host_offsets,
     )
 
 
@@ -919,14 +922,14 @@ def test_kda_prefill_given_gate_drops_inside_its_blocks(dim, l2norm, heads, peri
     unnormalized rows of key heads shared by two value heads, and with one drop a chunk, which
     passes the chunk-wide bound and still takes the per-pair diagonal blocks of normalized rows."""
     torch.manual_seed(42)
-    workload = KDAFwdTest(1, 128, heads, dim, torch.bfloat16, l2norm=l2norm, value_heads=4)
+    workload = KDAFwdWorkload(1, 128, heads, dim, torch.bfloat16, l2norm=l2norm, value_heads=4)
     q, k, v, g, beta, state = workload.gen_inputs()
     if not l2norm:
         # Unit keys keep the delta rule contractive without the in-kernel normalization.
         q, k = (x / x.norm(dim=-1, keepdim=True) for x in (q, k))
     row = torch.arange(g.shape[1], device=g.device) % period
     g = torch.where(row == 4, -drop, 0.0)[None, :, None, None].expand_as(g).to(g.dtype)
-    workload.check(KDAFwdOp(use_qk_l2norm_in_kernel=l2norm), q, k, v, g, beta, state)
+    check(workload, KDAFwdOp(use_qk_l2norm_in_kernel=l2norm), q, k, v, g, beta, state)
 
 
 @pytest.mark.sm90
@@ -946,10 +949,10 @@ def test_kda_prefill_strong_decay_sequence_among_ordinary_sequences(packed):
     torch.manual_seed(42)
     if packed:
         lengths = tuple(length + (-200, 100, 200, -100)[i % 4] for i in range(sequences))
-        workload = KDAFwdTest(1, 0, heads, 128, torch.bfloat16, sequence_lengths=lengths)
+        workload = KDAFwdWorkload(1, 0, heads, 128, torch.bfloat16, sequence_lengths=lengths)
         start = lengths[0]
     else:
-        workload = KDAFwdTest(sequences, length, heads, 128, torch.bfloat16)
+        workload = KDAFwdWorkload(sequences, length, heads, 128, torch.bfloat16)
         start = length
     inputs = list(workload.gen_inputs())
     g = inputs[3].clone()
@@ -957,10 +960,10 @@ def test_kda_prefill_strong_decay_sequence_among_ordinary_sequences(packed):
     strong = flat[start + 100 : start + 228]
     strong.copy_(torch.empty(strong.shape, device=g.device).uniform_(*_strong_decays(g.dtype)))
     inputs[3] = g
-    workload.check(KDAFwdOp(use_qk_l2norm_in_kernel=True), *inputs)
+    check(workload, KDAFwdOp(use_qk_l2norm_in_kernel=True), *inputs)
 
 
-_pooled = functools.partial(pooled_call, "KDAFwdOp", KDAFwdCallTest)
+_pooled = functools.partial(pooled_call, "KDAFwdOp", KDAFwdCall)
 
 
 @pytest.mark.parametrize(
@@ -989,8 +992,8 @@ def test_kda_decode_updates_its_slots_of_a_state_pool(
     """A decode step reads each sequence's state from its slot and writes it back in place,
     in either state layout; a 64-wide value-major row takes half the lanes of a 128-wide one."""
     torch.manual_seed(42)
-    test = _pooled(dtype, B=5, S=1, H=2, HV=4, K=dim, V=dim, P=16, **flags)
-    test.check(KDAFwdOp(**flags), *test.gen_inputs())
+    workload = _pooled(dtype, B=5, S=1, H=2, HV=4, K=dim, V=dim, P=16, **flags)
+    check(workload, KDAFwdOp(**flags), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -998,11 +1001,11 @@ def test_kda_raw_gate_decode_updates_its_slots_of_a_state_pool() -> None:
     """A pooled step forms each channel's decay from the raw gate, its rate and its bias."""
     torch.manual_seed(42)
     flags = {"state_v_first": True, "use_gate_in_kernel": True, "lower_bound": -5.0}
-    test = _pooled(
+    workload = _pooled(
         torch.bfloat16, some=("A_log", "dt_bias"), B=3, S=1, H=2, HV=4, K=128, V=128, P=8,
         **flags,
     )  # fmt: skip
-    test.check(KDAFwdOp(**flags), *test.gen_inputs())
+    check(workload, KDAFwdOp(**flags), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -1013,8 +1016,8 @@ def test_kda_decode_steps_a_value_major_state() -> None:
         "KDAFwdOp", {"T": "bfloat16"}, some=["initial_state"], B=3, S=1, H=2, HV=4, K=128,
         V=128, state_v_first=True,
     )  # fmt: skip
-    test = KDAFwdCallTest(call)
-    test.check(KDAFwdOp(state_v_first=True), *test.gen_inputs())
+    workload = KDAFwdCall(call)
+    check(workload, KDAFwdOp(state_v_first=True), *workload.gen_inputs())
 
 
 # Enough (sequence, value head) pairs for the one-kernel prefill on any SM89 device.
@@ -1087,11 +1090,11 @@ def test_kda_sm90_fp16_one_cta_prefill_forms_a_strong_chunk_per_pair(chunk_prefi
     chunk whose decay overflows fp16 rows centred on it takes per-pair entries beside centred
     ones."""
     torch.manual_seed(42)
-    workload = KDAFwdTest(4, 64, _one_wave_heads(4), 128, torch.float16)
+    workload = KDAFwdWorkload(4, 64, _one_wave_heads(4), 128, torch.float16)
     q, k, v, g, beta, state = workload.gen_inputs()
     g = g.clone()
     g[1] = torch.empty_like(g[1]).uniform_(*_strong_decays(g.dtype))
-    workload.check(KDAFwdOp(use_qk_l2norm_in_kernel=True), q, k, v, g, beta, state)
+    check(workload, KDAFwdOp(use_qk_l2norm_in_kernel=True), q, k, v, g, beta, state)
     assert not chunk_prefill_runs
 
 
@@ -1144,11 +1147,11 @@ def test_kda_prefill_updates_its_slots_of_a_state_pool(
     torch.manual_seed(42)
     flags = {"state_v_first": state_v_first, "use_qk_l2norm_in_kernel": True}
     heads = _one_wave_heads(len(_UNEVEN)) if dtype == torch.float16 else _FUSED_HEADS
-    test = _pooled(
+    workload = _pooled(
         dtype, some=("cu_seqlens", "cu_seqlens_cpu"), B=1, S=sum(_UNEVEN), seq_lens=_UNEVEN,
         H=4, HV=heads, K=128, V=128, P=12, **flags,
     )  # fmt: skip
-    test.check(KDAFwdOp(**flags), *test.gen_inputs())
+    check(workload, KDAFwdOp(**flags), *workload.gen_inputs())
     assert bool(chunk_prefill_runs) == chunked
 
 
@@ -1168,11 +1171,11 @@ def test_kda_raw_gate_prefill_updates_its_slots_of_a_value_major_pool() -> None:
     end in their slots of a value-major pool; an empty sequence leaves its slot as it was."""
     torch.manual_seed(42)
     flags = {"state_v_first": True, "use_gate_in_kernel": True, "lower_bound": -5.0}
-    test = _pooled(
+    workload = _pooled(
         torch.bfloat16, some=("cu_seqlens", "cu_seqlens_cpu", "A_log", "dt_bias"), B=1,
         S=sum(_UNEVEN), seq_lens=_UNEVEN, H=4, HV=_FUSED_HEADS, K=128, V=128, P=12, **flags,
     )  # fmt: skip
-    test.check(KDAFwdOp(**flags), *test.gen_inputs())
+    check(workload, KDAFwdOp(**flags), *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -1201,13 +1204,13 @@ def test_kda_chunk_prefill_walks_a_value_major_state(pooled: bool, length: int, 
     flags = {"state_v_first": True, "use_qk_l2norm_in_kernel": True}
     shape = {"B": 1, "S": length, "H": heads, "HV": heads, "K": 128, "V": 128}
     if pooled:
-        test = _pooled(torch.bfloat16, P=6, **shape, **flags)
+        workload = _pooled(torch.bfloat16, P=6, **shape, **flags)
     else:
         call = manifest_call(
             "KDAFwdOp", {"T": "bfloat16"}, some=["initial_state"], **shape, **flags
         )
-        test = KDAFwdCallTest(call)
-    test.check(KDAFwdOp(**flags), *test.gen_inputs())
+        workload = KDAFwdCall(call)
+    check(workload, KDAFwdOp(**flags), *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -1356,8 +1359,8 @@ def test_kda_fused_prefill_walks_a_value_major_state(arch) -> None:
         "KDAFwdOp", {"T": "float16"}, some=["initial_state"], B=4, S=64, H=4, HV=heads, K=128,
         V=128, state_v_first=True,
     )  # fmt: skip
-    test = KDAFwdCallTest(call)
-    test.check(KDAFwdOp(state_v_first=True), *test.gen_inputs())
+    workload = KDAFwdCall(call)
+    check(workload, KDAFwdOp(state_v_first=True), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -1383,13 +1386,13 @@ def test_kda_long_prefill_walks_a_value_major_pool() -> None:
         "KDAFwdOp", {"T": "bfloat16"}, some=["initial_state", "state_indices"], B=sequences,
         S=length, H=heads, HV=heads, K=128, V=128, P=2 * sequences, **flags,
     )  # fmt: skip
-    test = KDAFwdCallTest(call)
-    inputs = list(test.gen_inputs())
+    workload = KDAFwdCall(call)
+    inputs = list(workload.gen_inputs())
     g = inputs[3].clone()
     strong = g[1, 100:228]
     strong.copy_(torch.empty(strong.shape, device=g.device).uniform_(*_strong_decays(g.dtype)))
     inputs[3] = g
-    test.check(KDAFwdOp(**flags), *inputs)
+    check(workload, KDAFwdOp(**flags), *inputs)
 
 
 @pytest.mark.smoke
@@ -1398,10 +1401,10 @@ def test_kda_refuses_a_packed_token_over_an_empty_sequence() -> None:
     """One packed token over two sequences leaves one empty: the decode reads one token and one
     state a row, so the op refuses the call instead of pairing a slot with the wrong token."""
     torch.manual_seed(42)
-    test = _pooled(
+    workload = _pooled(
         torch.bfloat16, some=("cu_seqlens",), B=1, S=1, seq_lens=[0, 1], H=2, HV=4, K=128,
         V=128, P=8, state_v_first=True,
     )  # fmt: skip
-    inputs = test.gen_inputs()
+    inputs = workload.gen_inputs()
     with pytest.raises(OpNotAvailableError, match="one token a sequence"):
         KDAFwdOp(state_v_first=True)(*inputs[:10], state_indices=inputs[10])

@@ -3,16 +3,11 @@ import torch
 
 from tests.cuda_graph_contract import check_replay
 from tests.misaligned import misaligned
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._kernels.transform import HadamardTransformCall
 from tileops.transform import HadamardTransformFwdOp
 from workloads.device import run_device
 from workloads.transform import HadamardTransformWorkload
-
-
-class HadamardTransformTest(HadamardTransformWorkload, TestBase):
-    pass
-
 
 # One case per kernel and per end of its range.
 _SMOKE = pytest.mark.smoke
@@ -62,8 +57,8 @@ class HadamardTransformFixture(FixtureBase):
 def test_hadamard_transform(
     batch_shape: tuple, n: int, dtype: torch.dtype, base_order: int
 ) -> None:
-    test = HadamardTransformTest(batch_shape, n, dtype, base_order)
-    test.check(HadamardTransformFwdOp(base_order), *test.gen_inputs())
+    workload = HadamardTransformWorkload(batch_shape, n, dtype, base_order)
+    check(workload, HadamardTransformFwdOp(base_order), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -73,7 +68,7 @@ def test_hadamard_transform_unaligned_storage(n: int, base_order: int) -> None:
     rows = 6
     x = misaligned(torch.randn(rows, n, device=run_device(), dtype=torch.bfloat16))
     workload = HadamardTransformWorkload((rows,), n, x.dtype, base_order)
-    TestBase.check(workload, HadamardTransformFwdOp(base_order), x)
+    check(workload, HadamardTransformFwdOp(base_order), x)
 
 
 @pytest.mark.sm90
@@ -87,7 +82,9 @@ def test_hadamard_transform_unaligned_storage(n: int, base_order: int) -> None:
 )
 def test_hadamard_transform_graph_replay(batch_shape) -> None:
     """DeepSeek-V4-Flash's decode-step transforms of its indexer query and compressed key."""
-    check_replay(HadamardTransformTest(batch_shape, 128, torch.bfloat16), HadamardTransformFwdOp())
+    check_replay(
+        HadamardTransformWorkload(batch_shape, 128, torch.bfloat16), HadamardTransformFwdOp()
+    )
 
 
 @pytest.mark.in_tree_kernels

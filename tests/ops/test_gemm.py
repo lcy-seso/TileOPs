@@ -5,7 +5,7 @@ import torch
 
 from tests.cuda_graph_contract import CapturedGraph, check_replay
 from tests.misaligned import misaligned
-from tests.workload_test_base import FixtureBase, TestBase, op_preferring
+from tests.workload_test_base import FixtureBase, check, op_preferring
 from tileops._kernels.constants import BLOCK_SHARED_BYTES_OPT_IN
 from tileops._kernels.gemm import (
     GEMMINT8W8A8Call,
@@ -45,30 +45,6 @@ from workloads.gemm import (
     repack_w4a16_weight,
 )
 from workloads.numerics import compare_outputs
-
-
-class GEMMTest(GEMMWorkload, TestBase):
-    pass
-
-
-class GEMMFP8Test(GEMMFP8Workload, TestBase):
-    pass
-
-
-class GEMMINT8W8A8Test(GEMMINT8W8A8Workload, TestBase):
-    pass
-
-
-class GEMMW4A16Test(GEMMW4A16Workload, TestBase):
-    pass
-
-
-class GEMMW4A8Test(GEMMW4A8Workload, TestBase):
-    pass
-
-
-class GEMMW4A8MixedSignTest(GEMMW4A8MixedSignWorkload, TestBase):
-    pass
 
 
 class GEMMFixture(FixtureBase):
@@ -702,11 +678,11 @@ def test_gemm(
     trans_b: bool,
     tune: bool,
 ) -> None:
-    test = GEMMTest(m, n, k, dtype, trans_a, trans_b)
+    workload = GEMMWorkload(m, n, k, dtype, trans_a, trans_b)
     op = GEMMFwdOp(trans_a=trans_a, trans_b=trans_b)
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -729,14 +705,14 @@ def test_gemm_fp8(
     out_dtype: torch.dtype,
     bias: bool,
 ) -> None:
-    test = GEMMFP8Test(m, n, k, dtype, scale_mode, out_dtype=out_dtype, bias=bias)
+    workload = GEMMFP8Workload(m, n, k, dtype, scale_mode, out_dtype=out_dtype, bias=bias)
     op = GEMMFP8FwdOp(out_dtype=out_dtype)
-    inputs = test.gen_inputs()
+    inputs = workload.gen_inputs()
     if dtype != torch.float8_e4m3fn:
         with pytest.raises(ValueError, match=r"outside \['float8_e4m3fn'\]"):
             op(*inputs)
         return
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 _INT8_WS, _INT8_PP, _INT8_SIMPLE = (
@@ -953,7 +929,7 @@ def test_gemm_int8_w8a8(
     key: str,
     arch: int,
 ) -> None:
-    test = GEMMINT8W8A8Test(m, n, k, per_token, per_channel, out_dtype=out_dtype, bias=bias)
+    workload = GEMMINT8W8A8Workload(m, n, k, per_token, per_channel, out_dtype=out_dtype, bias=bias)
     op = GEMMINT8W8A8FwdOp(out_dtype=out_dtype)
     call = GEMMINT8W8A8Call(
         m=m,
@@ -966,7 +942,7 @@ def test_gemm_int8_w8a8(
         device=run_device(),
     )
     assert op.key_for("gemm_int8_w8a8", call) == (_INT8_SIMPLE if arch == 89 else key)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -1038,13 +1014,13 @@ def test_gemm_int8_w8a8_native_width_tiles(
     shape: tuple, scales: tuple, out_dtype: torch.dtype, bias: bool, tile: tuple
 ) -> None:
     """Pin native tiles to cover K atoms, tail stores, scale modes and bias on any SM90."""
-    test = GEMMINT8W8A8Test(*shape, *scales, out_dtype=out_dtype, bias=bias)
+    workload = GEMMINT8W8A8Workload(*shape, *scales, out_dtype=out_dtype, bias=bias)
     op = GEMMINT8W8A8FwdOp(out_dtype=out_dtype, target=BUILTIN)
-    inputs = test.gen_inputs()
-    test.check(op, *inputs)
+    inputs = workload.gen_inputs()
+    check(workload, op, *inputs)
     (kernel,) = [kern for kern in op.iter_kernels() if type(kern).__name__ == "GEMMINT8W8A8Kernel"]
     kernel.config = {"block_n": tile[0], "num_stages": 2, "group_size_m": 8, "block_k": tile[1]}
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.in_tree_kernels
@@ -1064,8 +1040,8 @@ def test_gemm_int8_w8a8_operands_off_a_16_byte_boundary(key: str, n: int) -> Non
     address it, including the one SM90 lowers the simple kernel's copies to, and SM89's
     vectorized loads fault on it; each kernel is selected and still runs the call."""
     m = 64 if key == _INT8_WS else 300
-    test = GEMMINT8W8A8Test(m, n, 1024, True, True)
-    a, b, a_scale, b_scale = test.gen_inputs()
+    workload = GEMMINT8W8A8Workload(m, n, 1024, True, True)
+    a, b, a_scale, b_scale = workload.gen_inputs()
     a_off, b_off = misaligned(a), misaligned(b)
     assert a_off.data_ptr() % 16
     op = GEMMINT8W8A8FwdOp()
@@ -1079,7 +1055,7 @@ def test_gemm_int8_w8a8_operands_off_a_16_byte_boundary(key: str, n: int) -> Non
         device=run_device(),
     )
     assert op.key_for("gemm_int8_w8a8", call) == key
-    test.check(op, a_off, b_off, a_scale, b_scale)
+    check(workload, op, a_off, b_off, a_scale, b_scale)
 
 
 def _h200_w4a8_call(m: int, n: int, k: int) -> GEMMW4A8Call:
@@ -1180,9 +1156,9 @@ def test_gemm_w4a8_prefill_runs_a_full_one_wave_grid_a_tile_a_cta(
 
 @GEMMW4A16Fixture
 def test_gemm_w4a16(m: int, n: int, k: int, dtype: torch.dtype) -> None:
-    test = GEMMW4A16Test(m, n, k, dtype)
+    workload = GEMMW4A16Workload(m, n, k, dtype)
     op = GEMMW4A16FwdOp()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -1191,16 +1167,16 @@ def test_gemm_w4a16(m: int, n: int, k: int, dtype: torch.dtype) -> None:
 def test_gemm_w4a16_a_published_tile_height_pads_m_for_itself() -> None:
     """The M padding follows the published tile: a whole-tile height after the narrow decode
     tile pads M to its own extent, and a return to the narrow tile runs on logical M."""
-    test = GEMMW4A16Test(8, 256, 512, torch.float16)
+    workload = GEMMW4A16Workload(8, 256, 512, torch.float16)
     op = GEMMW4A16FwdOp()
-    inputs = test.gen_inputs()
-    test.check(op, *inputs)
+    inputs = workload.gen_inputs()
+    check(workload, op, *inputs)
     (kernel,) = [k for k in op.iter_kernels() if type(k).__name__ == "GEMMW4A16Kernel"]
     narrow = dict(kernel.config)
     assert narrow["block_m"] == 8
     for block_m, padded in ((64, 64), (8, 8)):
         kernel.config = {**narrow, "block_m": block_m}
-        test.check(op, *inputs)
+        check(workload, op, *inputs)
         ((_, m_pad),) = kernel._generation.programs.values()
         assert m_pad == padded
 
@@ -1213,14 +1189,14 @@ def test_gemm_w4a16_a_published_tile_height_pads_m_for_itself() -> None:
 def test_gemm_w4a16_is_exact_on_a_basis_vector(k_index: int) -> None:
     """A basis vector selects the exact signed-INT4 value, group scale and zero point."""
     workload = GEMMW4A16BasisWorkload(k_index)
-    TestBase.check(workload, GEMMW4A16FwdOp(), *workload.gen_inputs())
+    check(workload, GEMMW4A16FwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_gemm_fp8_block128_single_k_block_uses_block_kernel() -> None:
-    test = GEMMFP8Test(128, 256, 128, torch.float8_e4m3fn, "block128")
+    workload = GEMMFP8Workload(128, 256, 128, torch.float8_e4m3fn, "block128")
     op = GEMMFP8FwdOp()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.sm89
@@ -1234,8 +1210,8 @@ def test_gemm_fp8_block128_single_k_block_uses_block_kernel() -> None:
 )
 def test_gemm_fp8_without_tma_or_wgmma(scale_mode: str) -> None:
     """SM89 has FP8 tensor cores but no TMA or WGMMA, so every scale grid runs without them."""
-    test = GEMMFP8Test(256, 512, 1024, torch.float8_e4m3fn, scale_mode)
-    test.check(GEMMFP8FwdOp(), *test.gen_inputs())
+    workload = GEMMFP8Workload(256, 512, 1024, torch.float8_e4m3fn, scale_mode)
+    check(workload, GEMMFP8FwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -1243,8 +1219,8 @@ def test_gemm_fp8_without_tma_or_wgmma(scale_mode: str) -> None:
 @pytest.mark.smoke
 def test_gemm_fp8_1d2d_shared_epilogue_matches_reference() -> None:
     """Per-block scales preserve the complete output of a narrow projection."""
-    test = GEMMFP8Test(128, 2112, 7168, torch.float8_e4m3fn, "block128x128")
-    test.check(GEMMFP8FwdOp(target=BUILTIN), *test.gen_inputs())
+    workload = GEMMFP8Workload(128, 2112, 7168, torch.float8_e4m3fn, "block128x128")
+    check(workload, GEMMFP8FwdOp(target=BUILTIN), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -1258,8 +1234,8 @@ def test_gemm_fp8_1d2d_shared_epilogue_matches_reference() -> None:
 )
 def test_gemm_fp8_1d1d_wave_matches_reference(m: int, n: int, k: int) -> None:
     """Per-row weight scales preserve every output on tall projections."""
-    test = GEMMFP8Test(m, n, k, torch.float8_e4m3fn, "block128")
-    test.check(GEMMFP8FwdOp(target=BUILTIN), *test.gen_inputs())
+    workload = GEMMFP8Workload(m, n, k, torch.float8_e4m3fn, "block128")
+    check(workload, GEMMFP8FwdOp(target=BUILTIN), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -1275,8 +1251,8 @@ def test_gemm_fp8_1d1d_wave_matches_reference(m: int, n: int, k: int) -> None:
 )
 def test_gemm_fp8_1d2d_wave_matches_reference(m: int, n: int, k: int) -> None:
     """Per-block weight scales preserve every output on tall and wide projections."""
-    test = GEMMFP8Test(m, n, k, torch.float8_e4m3fn, "block128x128")
-    test.check(GEMMFP8FwdOp(target=BUILTIN), *test.gen_inputs())
+    workload = GEMMFP8Workload(m, n, k, torch.float8_e4m3fn, "block128x128")
+    check(workload, GEMMFP8FwdOp(target=BUILTIN), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -1290,8 +1266,8 @@ def test_gemm_fp8_1d2d_wave_matches_reference(m: int, n: int, k: int) -> None:
 )
 def test_gemm_fp8_1d2d_wave_column_run_matches_reference(n: int, k: int) -> None:
     """Column-scale blocks and reused row-scale spans preserve every output."""
-    test = GEMMFP8Test(4096, n, k, torch.float8_e4m3fn, "block128x128")
-    test.check(GEMMFP8FwdOp(target=BUILTIN), *test.gen_inputs())
+    workload = GEMMFP8Workload(4096, n, k, torch.float8_e4m3fn, "block128x128")
+    check(workload, GEMMFP8FwdOp(target=BUILTIN), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -1305,8 +1281,8 @@ def test_gemm_fp8_1d2d_wave_column_run_matches_reference(n: int, k: int) -> None
 )
 def test_gemm_fp8_single_row_tile_matches_reference(n: int, scale_mode: str) -> None:
     """Per-tensor and per-block scale grids both preserve narrow-row projections."""
-    test = GEMMFP8Test(128, n, 7168, torch.float8_e4m3fn, scale_mode)
-    test.check(GEMMFP8FwdOp(target=BUILTIN), *test.gen_inputs())
+    workload = GEMMFP8Workload(128, n, 7168, torch.float8_e4m3fn, scale_mode)
+    check(workload, GEMMFP8FwdOp(target=BUILTIN), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -1314,8 +1290,8 @@ def test_gemm_fp8_single_row_tile_matches_reference(n: int, scale_mode: str) -> 
 @pytest.mark.smoke
 def test_gemm_fp8_1d2d_deepest_ring_launches() -> None:
     """Repeated scale groups preserve every output across the contraction."""
-    test = GEMMFP8Test(128, 4096, 2560, torch.float8_e4m3fn, "block128x128")
-    test.check(GEMMFP8FwdOp(target=BUILTIN), *test.gen_inputs())
+    workload = GEMMFP8Workload(128, 4096, 2560, torch.float8_e4m3fn, "block128x128")
+    check(workload, GEMMFP8FwdOp(target=BUILTIN), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -1324,8 +1300,10 @@ def test_gemm_fp8_1d2d_deepest_ring_launches() -> None:
 def test_gemm_fp8_per_tensor_176_wide_matches_reference() -> None:
     """Per-tensor scaling preserves ragged row and column boundaries."""
     sm_count = get_sm_count(torch.device(run_device()).index)
-    test = GEMMFP8Test(248, 176 * (sm_count // 2) - 16, 256, torch.float8_e4m3fn, "per_tensor")
-    test.check(GEMMFP8FwdOp(target=BUILTIN), *test.gen_inputs())
+    workload = GEMMFP8Workload(
+        248, 176 * (sm_count // 2) - 16, 256, torch.float8_e4m3fn, "per_tensor"
+    )
+    check(workload, GEMMFP8FwdOp(target=BUILTIN), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -1334,8 +1312,10 @@ def test_gemm_fp8_per_tensor_176_wide_matches_reference() -> None:
 def test_gemm_fp8_per_tensor_192_wide_matches_reference() -> None:
     """Per-tensor scaling preserves a projection with a partial column boundary."""
     sm_count = get_sm_count(torch.device(run_device()).index)
-    test = GEMMFP8Test(256, 192 * (sm_count // 2) - 128, 256, torch.float8_e4m3fn, "per_tensor")
-    test.check(GEMMFP8FwdOp(target=BUILTIN), *test.gen_inputs())
+    workload = GEMMFP8Workload(
+        256, 192 * (sm_count // 2) - 128, 256, torch.float8_e4m3fn, "per_tensor"
+    )
+    check(workload, GEMMFP8FwdOp(target=BUILTIN), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -1453,13 +1433,13 @@ def test_gemm_fp8_short_call_streams_b_in_64_row_blocks(
     N axis, a multiple of 8, takes a's."""
     sm_count = get_sm_count(torch.device(run_device()).index)
     n = 64 * (sm_count + 9) - 24 if n is None else n
-    test = GEMMFP8Test(m, n, k, torch.float8_e4m3fn, scale_mode, out_dtype=out_dtype)
+    workload = GEMMFP8Workload(m, n, k, torch.float8_e4m3fn, scale_mode, out_dtype=out_dtype)
     op = GEMMFP8FwdOp(out_dtype=out_dtype)
     if tune:
         op.request_tune()
         # The first call tunes and returns the untuned result; the check reads the tuned one.
-        op(*test.gen_inputs())
-    test.check(op, *test.gen_inputs())
+        op(*workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.sm90
@@ -1484,7 +1464,7 @@ def test_gemm_fp8_graph_replay(n: int, k: int) -> None:
     """The block-scaled FP8 GEMMs of one DeepSeek-V4-Flash decode token: the stacked ``wq_a``
     and ``wkv``, the stacked ``wq_b`` and indexer ``wq_b``, ``wq_b`` alone where a layer has no
     indexer, ``wo_b`` and the shared expert's two."""
-    check_replay(GEMMFP8Test(1, n, k, torch.float8_e4m3fn, "block128x128"), GEMMFP8FwdOp())
+    check_replay(GEMMFP8Workload(1, n, k, torch.float8_e4m3fn, "block128x128"), GEMMFP8FwdOp())
 
 
 @pytest.mark.parametrize(
@@ -1496,9 +1476,11 @@ def test_gemv_boundary(n: int, k: int, dtype: torch.dtype, band: str, arch: int)
     """A single activation row (``lhs_row``) or output column (``rhs_col``) supports a free
     extent and a contraction off the vector width."""
     lhs_row = band == "lhs_row"
-    test = GEMMTest(*((1, n) if lhs_row else (n, 1)), k, dtype, trans_a=False, trans_b=lhs_row)
+    workload = GEMMWorkload(
+        *((1, n) if lhs_row else (n, 1)), k, dtype, trans_a=False, trans_b=lhs_row
+    )
     op = GEMMFwdOp(trans_a=False, trans_b=lhs_row)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     assert all(
         isinstance(entry, GemvKernel) and entry.band == band
         for entry in op._entries_built("gemm").values()
@@ -1509,8 +1491,8 @@ def test_gemv_boundary(n: int, k: int, dtype: torch.dtype, band: str, arch: int)
 @pytest.mark.smoke
 def test_gemm_coop2_epilogue_staged_in_two_chunks() -> None:
     """A wide output preserves every column across the epilogue."""
-    test = GEMMTest(704, 5440, 128, torch.bfloat16, False, True)
-    test.check(GEMMFwdOp(trans_b=True, target=BUILTIN), *test.gen_inputs())
+    workload = GEMMWorkload(704, 5440, 128, torch.bfloat16, False, True)
+    check(workload, GEMMFwdOp(trans_b=True, target=BUILTIN), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -1557,10 +1539,10 @@ def test_gemm_coop2_swap_matches_reference(
 ) -> None:
     """The transposed 256-row tile stores every output past M, N and K tails, in each layout,
     with and without narrow tiles."""
-    test = GEMMTest(1000, 1032, 1048, dtype, trans_a, trans_b)
+    workload = GEMMWorkload(1000, 1032, 1048, dtype, trans_a, trans_b)
     op = GEMMFwdOp(trans_a=trans_a, trans_b=trans_b, target=BUILTIN)
-    inputs = test.gen_inputs()
-    test.check(op, *inputs)
+    inputs = workload.gen_inputs()
+    check(workload, op, *inputs)
     (kernel,) = [k for k in op.iter_kernels() if type(k).__name__ == "GEMMTMAKernel"]
     kernel.config = {
         "coop2_swap": True,
@@ -1569,7 +1551,7 @@ def test_gemm_coop2_swap_matches_reference(
         "group_size_m": 1,
         **options,
     }
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.in_tree_kernels
@@ -1598,10 +1580,10 @@ def test_gemm_192_wide_transposed_tiles_match_reference(
     uniform_192: bool,
 ) -> None:
     """Hopper supports these tiles; only 132-SM H200 has the asserted calibrated ranking."""
-    test = GEMMTest(m, n, k, dtype, trans_a, trans_b)
+    workload = GEMMWorkload(m, n, k, dtype, trans_a, trans_b)
     op = GEMMFwdOp(trans_a=trans_a, trans_b=trans_b, target=BUILTIN)
-    inputs = test.gen_inputs()
-    test.check(op, *inputs)
+    inputs = workload.gen_inputs()
+    check(workload, op, *inputs)
     (kernel,) = [kern for kern in op.iter_kernels() if type(kern).__name__ == "GEMMTMAKernel"]
     cfg = kernel.config
     runs_192 = bool(cfg.get("coop2_swap")) and cfg["block_n"] == 192
@@ -1620,7 +1602,7 @@ def test_gemm_192_wide_transposed_tiles_match_reference(
             "num_stages": 3,
             "group_size_m": 1,
         }
-        test.check(op, *inputs)
+        check(workload, op, *inputs)
 
 
 @pytest.mark.in_tree_kernels
@@ -1628,10 +1610,10 @@ def test_gemm_192_wide_transposed_tiles_match_reference(
 @pytest.mark.smoke
 def test_gemm_coop2_swap_rejects_a_narrow_tile_splitting_a_swizzle_atom() -> None:
     """With trans_a, a 128-wide stage holds 64-column atoms, so a 96-wide tile is refused."""
-    test = GEMMTest(1000, 1032, 1048, torch.bfloat16, True, False)
+    workload = GEMMWorkload(1000, 1032, 1048, torch.bfloat16, True, False)
     op = GEMMFwdOp(trans_a=True, trans_b=False, target=BUILTIN)
-    inputs = test.gen_inputs()
-    test.check(op, *inputs)
+    inputs = workload.gen_inputs()
+    check(workload, op, *inputs)
     (kernel,) = [k for k in op.iter_kernels() if type(k).__name__ == "GEMMTMAKernel"]
     kernel.config = {
         "coop2_swap": True,
@@ -1649,8 +1631,8 @@ def test_gemm_coop2_swap_rejects_a_narrow_tile_splitting_a_swizzle_atom() -> Non
 @pytest.mark.smoke
 def test_gemm_k_tail_shorter_than_one_k_block() -> None:
     """A contraction of two elements preserves every output without alignment padding."""
-    test = GEMMTest(32, 64, 2, torch.bfloat16, False, True)
-    test.check(GEMMFwdOp(trans_b=True, target=BUILTIN), *test.gen_inputs())
+    workload = GEMMWorkload(32, 64, 2, torch.bfloat16, False, True)
+    check(workload, GEMMFwdOp(trans_b=True, target=BUILTIN), *workload.gen_inputs())
 
 
 _WS = {"block_m": 128, "block_n": 128, "block_k": 64, "num_stages": 4, "panel_size": 16}
@@ -1780,14 +1762,14 @@ def test_gemm_bias_on_each_structure(
     m: int, n: int, k: int, trans_a: bool, trans_b: bool, dtype: torch.dtype, config: dict
 ) -> None:
     """Each structure adds a column's bias to every row of it, past M, N and K tails."""
-    test = GEMMTest(m, n, k, dtype, trans_a, trans_b, bias=True)
+    workload = GEMMWorkload(m, n, k, dtype, trans_a, trans_b, bias=True)
     op = GEMMFwdOp(trans_a=trans_a, trans_b=trans_b, target=BUILTIN)
     call = GEMMCall(
         m=m, n=n, k=k, dtype=dtype, trans_a=trans_a, trans_b=trans_b, has_bias=True,
         device=run_device(),
     )  # fmt: skip
     op.kernel_for("gemm", lambda: call).config = config
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -1808,9 +1790,9 @@ def test_gemm_bias_on_selected_kernels(
 ) -> None:
     """The kernel selected for a shape adds the bias, a single one over a one-column output,
     to the float32 sum, and stores it in the output dtype."""
-    test = GEMMTest(m, n, k, torch.bfloat16, False, trans_b, bias=True, out_dtype=out_dtype)
+    workload = GEMMWorkload(m, n, k, torch.bfloat16, False, trans_b, bias=True, out_dtype=out_dtype)
     op = GEMMFwdOp(trans_b=trans_b, out_dtype=out_dtype, target=BUILTIN)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     assert all(isinstance(entry, kernel) for entry in op.iter_kernels())
 
 
@@ -2032,14 +2014,16 @@ def test_gemm_float32_output_on_each_structure(
 ) -> None:
     """Each structure writing a float32 output stores the unrounded float32 sum of bf16
     products, past M, N and K tails."""
-    test = GEMMTest(m, n, k, torch.bfloat16, trans_a, trans_b, bias=bias, out_dtype=torch.float32)
+    workload = GEMMWorkload(
+        m, n, k, torch.bfloat16, trans_a, trans_b, bias=bias, out_dtype=torch.float32
+    )
     op = GEMMFwdOp(trans_a=trans_a, trans_b=trans_b, out_dtype=torch.float32, target=BUILTIN)
     call = GEMMCall(
         m=m, n=n, k=k, dtype=torch.bfloat16, trans_a=trans_a, trans_b=trans_b, has_bias=bias,
         out_dtype=torch.float32, device=run_device(),
     )  # fmt: skip
     op.kernel_for("gemm", lambda: call).config = config
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -2048,7 +2032,7 @@ def test_gemm_float32_output_on_each_structure(
 def test_gemm_coop2_swap_refuses_a_float32_output() -> None:
     """The coop2_swap tile, whose transposed store writes 16-bit elements only, refuses a
     float32 output when it is built, rather than rounding it."""
-    test = GEMMTest(1000, 1032, 1048, torch.bfloat16, True, False, out_dtype=torch.float32)
+    workload = GEMMWorkload(1000, 1032, 1048, torch.bfloat16, True, False, out_dtype=torch.float32)
     op = GEMMFwdOp(trans_a=True, trans_b=False, out_dtype=torch.float32, target=BUILTIN)
     call = GEMMCall(
         m=1000, n=1032, k=1048, dtype=torch.bfloat16, trans_a=True, out_dtype=torch.float32,
@@ -2056,7 +2040,7 @@ def test_gemm_coop2_swap_refuses_a_float32_output() -> None:
     )  # fmt: skip
     op.kernel_for("gemm", lambda: call).config = {**_COOP2_SWAP, "group_size_m": 1}
     with pytest.raises(ValueError, match="coop2_swap"):
-        op(*test.gen_inputs())
+        op(*workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -2075,9 +2059,9 @@ def test_gemm_coop2_swap_refuses_a_float32_output() -> None:
 def test_gemm_float32_output_on_pilot_model_rows(m: int, n: int) -> None:
     """The tile selected for a pilot model's float32 logits, whose staging tile takes twice
     the shared memory of a 16-bit one, builds and stores the unrounded float32 sum."""
-    test = GEMMTest(m, n, 4096, torch.bfloat16, False, True, out_dtype=torch.float32)
+    workload = GEMMWorkload(m, n, 4096, torch.bfloat16, False, True, out_dtype=torch.float32)
     op = GEMMFwdOp(out_dtype=torch.float32, target=BUILTIN)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.sm90
@@ -2120,8 +2104,8 @@ def test_gemm_float32_output_on_pilot_model_rows(m: int, n: int) -> None:
 )  # fmt: skip
 def test_gemm_graph_replay(n: int, k: int, out_dtype: torch.dtype | None) -> None:
     """A one-token bfloat16 NT projection of a decode step."""
-    test = GEMMTest(1, n, k, torch.bfloat16, trans_b=True, out_dtype=out_dtype)
-    check_replay(test, GEMMFwdOp(out_dtype=out_dtype))
+    workload = GEMMWorkload(1, n, k, torch.bfloat16, trans_b=True, out_dtype=out_dtype)
+    check_replay(workload, GEMMFwdOp(out_dtype=out_dtype))
 
 
 @pytest.mark.in_tree_kernels
@@ -2130,9 +2114,9 @@ def test_gemm_graph_replay(n: int, k: int, out_dtype: torch.dtype | None) -> Non
 def test_gemm_bias_on_a_tile_wider_than_its_producer() -> None:
     """On H200 a short, wide NT call runs the one-wave 64 x 192 tile, whose 128 producer
     threads stage its bias in two passes; every column adds its bias past M, N and K tails."""
-    test = GEMMTest(76, 8456, 1040, torch.bfloat16, False, True, bias=True)
+    workload = GEMMWorkload(76, 8456, 1040, torch.bfloat16, False, True, bias=True)
     op = GEMMFwdOp(trans_b=True, target=BUILTIN)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     if calibration_key(torch.cuda.get_device_name(torch.device(run_device()))) != "h200":
         return
     (kernel,) = op.iter_kernels()
@@ -2146,9 +2130,9 @@ def test_gemm_bias_on_a_tile_wider_than_its_producer() -> None:
 def test_gemm_bias_on_a_two_tile_fill_ring() -> None:
     """On H200 a biased NT call whose rows fill two 64-row tiles runs the clustered fill
     tile, whose ring the shared memory holds beside its staged bias row."""
-    test = GEMMTest(128, 5280, 4096, torch.bfloat16, False, True, bias=True)
+    workload = GEMMWorkload(128, 5280, 4096, torch.bfloat16, False, True, bias=True)
     op = GEMMFwdOp(trans_b=True, target=BUILTIN)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     if calibration_key(torch.cuda.get_device_name(torch.device(run_device()))) != "h200":
         return
     (kernel,) = op.iter_kernels()
@@ -2179,9 +2163,9 @@ def test_gemm_short_wide_call_streams_b_in_64_row_blocks(
     """On a 132-SM H200 an NT call this short and wide runs the stream tile with two 64-row
     blocks of B a CTA, the last CTA's second block past N; M, N and K all end inside a
     tile."""
-    test = GEMMTest(m, n, k, dtype, False, True, bias=bias)
+    workload = GEMMWorkload(m, n, k, dtype, False, True, bias=bias)
     op = GEMMFwdOp(trans_b=True, target=BUILTIN)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     call = GEMMCall(m=m, n=n, k=k, dtype=dtype, trans_b=True, has_bias=bias, device=run_device())
     if call.calibration != "h200" or call.sm_count != 132:
         return
@@ -2195,9 +2179,9 @@ def test_gemm_short_wide_call_streams_b_in_64_row_blocks(
 def test_gemm_short_grid_runs_the_whole_smem_ring() -> None:
     """On H200 the basic tile a short NT grid runs takes every ring stage the shared memory
     holds, with a bias."""
-    test = GEMMTest(96, 4096, 12288, torch.bfloat16, False, True, bias=True)
+    workload = GEMMWorkload(96, 4096, 12288, torch.bfloat16, False, True, bias=True)
     op = GEMMFwdOp(trans_b=True, target=BUILTIN)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     if calibration_key(torch.cuda.get_device_name(torch.device(run_device()))) != "h200":
         return
     (kernel,) = op.iter_kernels()
@@ -2215,9 +2199,11 @@ def test_gemm_short_grid_runs_the_whole_smem_ring() -> None:
 def test_gemm_bias_on_two_row_gemv(out_dtype: torch.dtype | None) -> None:
     """Both rows of the two-row GEMV band, which only H200 is calibrated to take, add the bias,
     in either output dtype."""
-    test = GEMMTest(2, 256, 4096, torch.bfloat16, False, True, bias=True, out_dtype=out_dtype)
+    workload = GEMMWorkload(
+        2, 256, 4096, torch.bfloat16, False, True, bias=True, out_dtype=out_dtype
+    )
     op = GEMMFwdOp(trans_b=True, out_dtype=out_dtype, target=BUILTIN)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     if calibration_key(torch.cuda.get_device_name(torch.device(run_device()))) == "h200":
         (kernel,) = op.iter_kernels()
         assert isinstance(kernel, GemvKernel) and kernel.band == "lhs_rows"
@@ -2240,9 +2226,9 @@ def test_gemm_two_rows_run_the_gemv_where_it_streams_faster(
 ) -> None:
     """A two-row NT call runs the GEMV on a 6-deep ring where the H200 calibration ranks it
     above every tile grid."""
-    test = GEMMTest(2, n, k, dtype, False, True)
+    workload = GEMMWorkload(2, n, k, dtype, False, True)
     op = GEMMFwdOp(trans_b=True, target=BUILTIN)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     if calibration_key(torch.cuda.get_device_name(torch.device(run_device()))) != "h200":
         return
     (kernel,) = op.iter_kernels()
@@ -2256,9 +2242,9 @@ def test_gemm_two_rows_run_the_gemv_where_it_streams_faster(
 def test_gemm_two_rows_of_a_wide_weight_run_a_tile_grid() -> None:
     """A two-row NT call over a wide weight, which the operand-swapped tile grid streams
     faster, runs that grid on H200."""
-    test = GEMMTest(2, 3584, 6144, torch.bfloat16, False, True)
+    workload = GEMMWorkload(2, 3584, 6144, torch.bfloat16, False, True)
     op = GEMMFwdOp(trans_b=True, target=BUILTIN)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     if calibration_key(torch.cuda.get_device_name(torch.device(run_device()))) != "h200":
         return
     (kernel,) = op.iter_kernels()
@@ -2296,11 +2282,11 @@ def test_gemm_rows_of_one_tile_run_a_one_wave_column_grid(
     call = GEMMCall(m=m, n=n, k=k, dtype=dtype, trans_b=True, has_bias=bias, device=run_device())
     if call.calibration != "h200" or call.sm_count != 132:
         pytest.skip("the one-wave column grids above are counted on a 132-SM H200")
-    test = GEMMTest(m, n, k, dtype, False, True, bias=bias)
+    workload = GEMMWorkload(m, n, k, dtype, False, True, bias=bias)
     op = GEMMFwdOp(trans_b=True, target=BUILTIN)
     config = op.kernel_for("gemm", lambda: call).config
     assert (config["block_n"], config["num_stages"], config.get("cluster_m")) == (width, stages, 1)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -2479,12 +2465,12 @@ def test_gemm_one_wave_grid_runs_the_narrowest_coop2_tile(
     )
     if call.calibration != "h200" or call.sm_count != 132:
         pytest.skip("the one-wave grids above are counted on a 132-SM H200")
-    test = GEMMTest(m, n, k, dtype, False, True, bias=bias, out_dtype=out_dtype)
+    workload = GEMMWorkload(m, n, k, dtype, False, True, bias=bias, out_dtype=out_dtype)
     op = GEMMFwdOp(trans_b=True, out_dtype=out_dtype, target=BUILTIN)
     config = op.kernel_for("gemm", lambda: call).config
     staged = config.get("stage_n") or config["block_n"]
     assert (config.get("coop2"), config["block_n"], staged) == (True, *tile)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 # An H200's L2, which sets only the raster group of a persistent tile.
@@ -2553,12 +2539,12 @@ def test_gemm_one_tile_grid_loads_only_the_rows_of_a(
     atom; the tile's other rows hold stale data, and every stored output matches the
     reference."""
     call = GEMMCall(m=m, n=n, k=k, dtype=torch.bfloat16, trans_b=trans_b, device=run_device())
-    test = GEMMTest(m, n, k, torch.bfloat16, False, trans_b)
+    workload = GEMMWorkload(m, n, k, torch.bfloat16, False, trans_b)
     op = GEMMFwdOp(trans_b=trans_b, target=BUILTIN)
     config = op.kernel_for("gemm", lambda: call).config
     if call.calibration == "h200" and call.sm_count == 132:
         assert (config["block_m"], config["block_k"], config["split_k"]) == tile
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -2571,11 +2557,11 @@ def test_gemm_rows_of_half_a_tile_keep_tiles_at_least_64_wide() -> None:
     call = GEMMCall(m=m, n=n, k=k, dtype=torch.bfloat16, trans_b=True, device=run_device())
     if call.calibration != "h200" or call.sm_count != 132:
         pytest.skip("the one-wave column grid is counted on a 132-SM H200")
-    test = GEMMTest(m, n, k, torch.bfloat16, False, True)
+    workload = GEMMWorkload(m, n, k, torch.bfloat16, False, True)
     op = GEMMFwdOp(trans_b=True, target=BUILTIN)
     # The stream tile has no block_n.
     assert op.kernel_for("gemm", lambda: call).config.get("block_n") in (None, 64, 128, 192, 256)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -2597,9 +2583,9 @@ def test_gemm_empty_contraction_is_the_bias(
     m: int, n: int, dtype: torch.dtype, bias: bool, trans_a: bool
 ) -> None:
     """A product over K = 0 sums nothing: each element is its column's bias, or zero."""
-    test = GEMMTest(m, n, 0, dtype, trans_a, True, bias=bias)
+    workload = GEMMWorkload(m, n, 0, dtype, trans_a, True, bias=bias)
     op = GEMMFwdOp(trans_a=trans_a, trans_b=True, target=BUILTIN)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -2643,13 +2629,15 @@ def test_gemm_cp_async_split_k_adds_the_bias_in_the_reduction(
     op = op_preferring(
         GEMMFwdOp, "gemm_cp_async_pinned", Pinned, out_dtype=out_dtype, target=BUILTIN
     )
-    test = GEMMTest(256, 512, 1024, torch.bfloat16, False, True, bias=True, out_dtype=out_dtype)
-    inputs = test.gen_inputs()
+    workload = GEMMWorkload(
+        256, 512, 1024, torch.bfloat16, False, True, bias=True, out_dtype=out_dtype
+    )
+    inputs = workload.gen_inputs()
     op(*inputs)
     (kernel,) = op.iter_kernels()
     assert isinstance(kernel, Pinned)
     kernel.config = {**kernel.default_config, "split_k": 2}
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.in_tree_kernels
@@ -2658,9 +2646,9 @@ def test_gemm_cp_async_split_k_adds_the_bias_in_the_reduction(
     "m", [pytest.param(100, marks=pytest.mark.smoke), pytest.param(257, marks=pytest.mark.full)]
 )
 def test_gemm_w4a16_kernel_predicates_a_ragged_token_count(m: int) -> None:
-    test = GEMMW4A16Test(m, 1024, 512, torch.float16)
+    workload = GEMMW4A16Workload(m, 1024, 512, torch.float16)
     op = GEMMW4A16FwdOp(target=BUILTIN)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -2676,17 +2664,17 @@ def test_gemm_w4a16_kernel_predicates_a_ragged_token_count(m: int) -> None:
     ],
 )
 def test_gemm_w4a16_decode_partitions_match_the_reference(n: int, k: int) -> None:
-    test = GEMMW4A16Test(1, n, k, torch.float16)
-    test.check(GEMMW4A16FwdOp(target=BUILTIN), *test.gen_inputs())
+    workload = GEMMW4A16Workload(1, n, k, torch.float16)
+    check(workload, GEMMW4A16FwdOp(target=BUILTIN), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
 @pytest.mark.sm90
 @pytest.mark.smoke
 def test_gemm_w4a16_long_k_stages_metadata_per_tile() -> None:
-    test = GEMMW4A16Test(1, 64, 32896, torch.float16)
+    workload = GEMMW4A16Workload(1, 64, 32896, torch.float16)
     op = GEMMW4A16FwdOp(target=BUILTIN)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 def _w4a16_config(
@@ -2708,13 +2696,13 @@ def _w4a16_config(
 
 def _check_w4a16_config(m: int, n: int, k: int, config: dict) -> None:
     """Check the selected config, then ``config``, against the reference."""
-    test = GEMMW4A16Test(m, n, k, torch.float16)
+    workload = GEMMW4A16Workload(m, n, k, torch.float16)
     op = GEMMW4A16FwdOp(target=BUILTIN)
-    inputs = test.gen_inputs()
-    test.check(op, *inputs)
+    inputs = workload.gen_inputs()
+    check(workload, op, *inputs)
     (kernel,) = [kern for kern in op.iter_kernels() if type(kern).__name__ == "GEMMW4A16Kernel"]
     kernel.config = config
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.in_tree_kernels
@@ -2851,9 +2839,9 @@ def test_gemm_w4a16_drained_ring_serves_whole_k_two_warpgroup_tiles(m: int, n: i
     ring, which matches the reference."""
     if get_sm_count(torch.device(run_device()).index) != 132:
         pytest.skip("the op selects on the device's SMs, and the programs checked count 132")
-    test = GEMMW4A16Test(m, n, k, torch.float16)
+    workload = GEMMW4A16Workload(m, n, k, torch.float16)
     op = GEMMW4A16FwdOp(target=BUILTIN)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     (kernel,) = [kern for kern in op.iter_kernels() if type(kern).__name__ == "GEMMW4A16Kernel"]
     cfg = kernel.config
     source = kernel._builder(kernel._padded_m(cfg))(**cfg).get_kernel_source()
@@ -2970,10 +2958,10 @@ def test_gemm_w4a16_deferred_scale_tiles_match_the_reference(m: int, n: int, k: 
     and ragged rows of the deferred-scale selection match the reference."""
     if get_sm_count(torch.device(run_device()).index) != 132:
         pytest.skip("the op selects on the device's SMs, and the programs checked count 132")
-    test = GEMMW4A16Test(m, n, k, torch.float16)
-    inputs = test.gen_inputs()
+    workload = GEMMW4A16Workload(m, n, k, torch.float16)
+    inputs = workload.gen_inputs()
     _leave_nan_in_free_blocks()
-    test.check(GEMMW4A16FwdOp(target=BUILTIN), *inputs)
+    check(workload, GEMMW4A16FwdOp(target=BUILTIN), *inputs)
 
 
 @pytest.mark.in_tree_kernels
@@ -3010,10 +2998,10 @@ def test_gemm_w4a16_one_warpgroup_split_matches_the_reference(
     assert _pair_reduced(m_pad, n, k, 128, 132, cfg) == paired
     if get_sm_count(torch.device(run_device()).index) != 132:
         pytest.skip("the op selects on the device's SMs, and the program checked counts 132")
-    test = GEMMW4A16Test(m, n, k, torch.float16)
-    inputs = test.gen_inputs()
+    workload = GEMMW4A16Workload(m, n, k, torch.float16)
+    inputs = workload.gen_inputs()
     _leave_nan_in_free_blocks()
-    test.check(GEMMW4A16FwdOp(target=BUILTIN), *inputs)
+    check(workload, GEMMW4A16FwdOp(target=BUILTIN), *inputs)
 
 
 @pytest.mark.smoke
@@ -3063,16 +3051,16 @@ def test_gemm_w4a16_copies_metadata_windows_where_the_one_warpgroup_ring_holds_t
 @pytest.mark.smoke
 def test_gemm_w4a16_split_wide_tile_matches_the_reference() -> None:
     """Uneven contraction partitions preserve affine group scales and zero points."""
-    test = GEMMW4A16Test(128, 5120, 25600, torch.float16)
-    test.check(GEMMW4A16FwdOp(target=BUILTIN), *test.gen_inputs())
+    workload = GEMMW4A16Workload(128, 5120, 25600, torch.float16)
+    check(workload, GEMMW4A16FwdOp(target=BUILTIN), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
 @pytest.mark.sm90
 @pytest.mark.smoke
 def test_gemm_w4a16_request_tune_keeps_composite_runtime_state() -> None:
-    test = GEMMW4A16Test(1, 1024, 8192, torch.float16)
-    inputs = test.gen_inputs()
+    workload = GEMMW4A16Workload(1, 1024, 8192, torch.float16)
+    inputs = workload.gen_inputs()
     op = GEMMW4A16FwdOp(target=BUILTIN)
     expected = op(*inputs)
 
@@ -3082,9 +3070,9 @@ def test_gemm_w4a16_request_tune_keeps_composite_runtime_state() -> None:
     assert op._tune_requested is False
     assert torch.equal(op(*inputs), expected)
 
-    next_test = GEMMW4A16Test(2, 1024, 8192, torch.float16)
-    next_inputs = next_test.gen_inputs()
-    next_test.check(op, *next_inputs)
+    next_workload = GEMMW4A16Workload(2, 1024, 8192, torch.float16)
+    next_inputs = next_workload.gen_inputs()
+    check(next_workload, op, *next_inputs)
 
     with pytest.warns(UserWarning, match="does not support generic autotuning"):
         new_op = GEMMW4A16FwdOp()
@@ -3115,15 +3103,15 @@ def test_w4a16_repack_kernel_matches_the_reference(n: int, k: int) -> None:
 @pytest.mark.in_tree_kernels
 @pytest.mark.smoke
 def test_gemm_w4a16_repack_feeds_forward() -> None:
-    test = GEMMW4A16Test(64, 1024, 512, torch.float16)
-    activation, _, scale, zero = test.gen_inputs()
-    packed = test.row_major_weight
+    workload = GEMMW4A16Workload(64, 1024, 512, torch.float16)
+    activation, _, scale, zero = workload.gen_inputs()
+    packed = workload.row_major_weight
 
     prepacked = GEMMW4A16FwdOp().repack(packed)
     actual = GEMMW4A16FwdOp()(activation, prepacked, scale, zero)
 
     compare_outputs(
-        actual, test.ref_program(activation, prepacked, scale, zero), test.verification()
+        actual, workload.ref_program(activation, prepacked, scale, zero), workload.verification()
     )
 
 
@@ -3155,9 +3143,9 @@ def _repacked(op: GEMMW4A8FwdOp):
 @pytest.mark.sm90
 @GEMMW4A8Fixture
 def test_gemm_w4a8(m: int, n: int, k: int) -> None:
-    test = GEMMW4A8Test(m, n, k, 128)
+    workload = GEMMW4A8Workload(m, n, k, 128)
     op = GEMMW4A8FwdOp()
-    test.check(op, *test.gen_inputs(), runs=_repacked(op))
+    check(workload, op, *workload.gen_inputs(), runs=_repacked(op))
 
 
 @pytest.mark.sm90
@@ -3173,11 +3161,11 @@ def test_gemm_w4a8_decode_publishes_a_grid_with_the_workspace_it_sizes() -> None
 
     # One CTA per 64-row tile by default; every SM then splits tiles across CTAs, and a
     # sixth stage pushes the units' partial sums out of shared memory.
-    test = GEMMW4A8Test(32, 7168, 2304, 128)
+    workload = GEMMW4A8Workload(32, 7168, 2304, 128)
     op = GEMMW4A8FwdOp()
-    inputs = test.gen_inputs()
+    inputs = workload.gen_inputs()
     run = _repacked(op)
-    test.check(op, *inputs, runs=run)
+    check(workload, op, *inputs, runs=run)
     activation, weight, *scales = inputs
     repacked = op.repack(weight)
     expected = op(activation, repacked, *scales)
@@ -3192,7 +3180,7 @@ def test_gemm_w4a8_decode_publishes_a_grid_with_the_workspace_it_sizes() -> None
     ctas = get_sm_count(kernel.device_index)
     assert kernel.config["num_ctas"] < ctas
     kernel.config = {**kernel.config, "num_ctas": ctas, "num_stages": 6}
-    test.check(op, *inputs, runs=run)
+    check(workload, op, *inputs, runs=run)
     ((_, _, flags, _),) = kernel._generation.programs.values()
     assert flags.numel() == ctas * kernel.config["unit_warpgroups"]
     # More CTAs than tiles hand partial sums across CTAs; each reader clears its ready flag,
@@ -3215,9 +3203,9 @@ def test_gemm_w4a8_decode_publishes_a_grid_with_the_workspace_it_sizes() -> None
     ],
 )
 def test_gemm_w4a8_takes_group_scales_of_either_sign(m: int, n: int, k: int) -> None:
-    test = GEMMW4A8MixedSignTest(m, n, k, 128)
+    workload = GEMMW4A8MixedSignWorkload(m, n, k, 128)
     op = GEMMW4A8FwdOp()
-    test.check(op, *test.gen_inputs(), runs=_repacked(op))
+    check(workload, op, *workload.gen_inputs(), runs=_repacked(op))
 
 
 @pytest.mark.sm90
@@ -3239,9 +3227,9 @@ def test_gemm_w4a8_takes_group_scales_of_either_sign(m: int, n: int, k: int) -> 
 )
 def test_gemm_w4a8_prefill_prefix_edges(m: int, n: int, k: int) -> None:
     """Clipped accumulator groups produce fresh, scaled results through the public op."""
-    test = GEMMW4A8MixedSignTest(m, n, k, 128)
+    workload = GEMMW4A8MixedSignWorkload(m, n, k, 128)
     op = GEMMW4A8FwdOp(target=BUILTIN)
-    test.check(op, *test.gen_inputs(), runs=_repacked(op))
+    check(workload, op, *workload.gen_inputs(), runs=_repacked(op))
 
 
 @pytest.mark.sm90
@@ -3305,13 +3293,13 @@ def test_gemm_w4a8_reuses_prefill_state_with_changed_inputs(
         n = (2 * get_sm_count(torch.device(run_device()).index) + 1) * group_size
     repeats = 20 if len(token_counts) == 1 else 3
     for m in token_counts:
-        test = GEMMW4A8MixedSignTest(m, n, k, 128)
-        raw = test.gen_inputs()
-        test.check(op, *raw, runs=_repacked(op))
+        workload = GEMMW4A8MixedSignWorkload(m, n, k, 128)
+        raw = workload.gen_inputs()
+        check(workload, op, *raw, runs=_repacked(op))
         alternate = (-raw[0].float()).to(raw[0].dtype)
         logical_inputs = (raw, (alternate, *raw[1:]))
-        references = tuple(test.ref_program(*args) for args in logical_inputs)
-        evidence = tuple(test.verification(*args) for args in logical_inputs)
+        references = tuple(workload.ref_program(*args) for args in logical_inputs)
+        evidence = tuple(workload.verification(*args) for args in logical_inputs)
         activation = raw[0].clone()
         inputs = (activation, op.repack(raw[1]), *raw[2:])
         compare_outputs(op(*inputs), references[0], evidence[0])
@@ -3337,8 +3325,8 @@ def test_gemm_w4a8_request_tune_keeps_results() -> None:
     op = GEMMW4A8FwdOp()
     op.request_tune()
     for m in (1, 64, 1):
-        test = GEMMW4A8Test(m, 256, 512, 128)
-        test.check(op, *test.gen_inputs(), runs=_repacked(op))
+        workload = GEMMW4A8Workload(m, 256, 512, 128)
+        check(workload, op, *workload.gen_inputs(), runs=_repacked(op))
 
 
 @pytest.mark.in_tree_kernels
@@ -3399,10 +3387,10 @@ def test_gemm_w4a8_rejects_a_shape_outside_the_signature(m: int, n: int, k: int,
 @pytest.mark.smoke
 def test_gemm_w4a8_refuses_a_group_other_than_128() -> None:
     """``group_size`` 64 is in the signature, and no in-tree kernel serves it."""
-    test = GEMMW4A8Test(1, 256, 512, 64)
+    workload = GEMMW4A8Workload(1, 256, 512, 64)
     op = GEMMW4A8FwdOp(group_size=64, target=BUILTIN)
     with pytest.raises(ValueError, match="group_size"):
-        op(*test.gen_inputs())
+        op(*workload.gen_inputs())
     assert not op._entries_built("gemm_w4a8")
 
 
@@ -3504,8 +3492,8 @@ def test_gemm_offset_operand_runs_as_an_aligned_one(case, shifted: int) -> None:
 )
 def test_gemv_largest_tuning_ring(reduce_threads: int, block_n: int, dtype: torch.dtype) -> None:
     """The largest admitted staged ring compiles and preserves GEMV outputs."""
-    test = GEMMWorkload(1, 256, 16384, dtype, trans_b=True)
-    inputs = test.gen_inputs()
+    workload = GEMMWorkload(1, 256, 16384, dtype, trans_b=True)
+    inputs = workload.gen_inputs()
     op = GEMMFwdOp(trans_b=True)
     op(*inputs)
     entries = tuple(op._entries_built("gemm").values())
@@ -3520,7 +3508,7 @@ def test_gemv_largest_tuning_ring(reduce_threads: int, block_n: int, dtype: torc
     config = {"block_n": block_n, "reduce_threads": reduce_threads, "num_stages": 6}
     assert config in kernel.autotune_configs
     kernel.init_config(config)
-    compare_outputs(op(*inputs), test.ref_program(*inputs), test.verification(*inputs))
+    compare_outputs(op(*inputs), workload.ref_program(*inputs), workload.verification(*inputs))
 
 
 @pytest.mark.parametrize(
@@ -3539,8 +3527,8 @@ def test_gemv_largest_tuning_ring(reduce_threads: int, block_n: int, dtype: torc
 def test_gemv_offset_storage(lhs_row: bool, operand: int, dtype: torch.dtype, arch: int) -> None:
     """Contiguous inputs with an element offset retain the public GEMV contract."""
     m, n = (1, 3001) if lhs_row else (3001, 1)
-    test = GEMMWorkload(m, n, 1024, dtype, trans_b=lhs_row)
-    inputs = test.gen_inputs()
+    workload = GEMMWorkload(m, n, 1024, dtype, trans_b=lhs_row)
+    inputs = workload.gen_inputs()
     source = inputs[operand]
     backing = torch.empty(source.numel() + 2, dtype=dtype, device=source.device)
     backing.fill_(17)
@@ -3553,7 +3541,9 @@ def test_gemv_offset_storage(lhs_row: bool, operand: int, dtype: torch.dtype, ar
     output = op(*actual_inputs)
     entries = tuple(op._entries_built("gemm").values())
     assert entries and all(isinstance(entry, GemvKernel) for entry in entries)
-    compare_outputs(output, test.ref_program(*actual_inputs), test.verification(*actual_inputs))
+    compare_outputs(
+        output, workload.ref_program(*actual_inputs), workload.verification(*actual_inputs)
+    )
     torch.testing.assert_close(backing, before, rtol=0, atol=0)
 
 
@@ -3664,9 +3654,9 @@ def test_gemv_register_body(
     rows reduced over 256 lanes, a second burst with a float32 output, a column bias, the
     one-column band with its scalar bias, and three bursts of aligned rows, unrolled, and of
     odd rows, in a loop."""
-    test = GEMMTest(m, n, k, dtype, trans_b=trans_b, bias=bias, out_dtype=out_dtype)
+    workload = GEMMWorkload(m, n, k, dtype, trans_b=trans_b, bias=bias, out_dtype=out_dtype)
     op = GEMMFwdOp(trans_b=trans_b, out_dtype=out_dtype)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     (kernel,) = op._entries_built("gemm").values()
     assert isinstance(kernel, GemvKernel) and not kernel.staged
 
@@ -3682,9 +3672,9 @@ def test_gemv_register_body(
 def test_gemv_dispatched_body(per_sm: int, extra: int, k: int, rows: int | None) -> None:
     """The staged ring on rows it copies 8 bytes at a time, and odd rows two a warp in a loop."""
     n = per_sm * get_sm_count(torch.device(run_device()).index) + extra
-    test = GEMMTest(1, n, k, torch.bfloat16, trans_b=True)
+    workload = GEMMWorkload(1, n, k, torch.bfloat16, trans_b=True)
     op = GEMMFwdOp()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     (kernel,) = op._entries_built("gemm").values()
     assert isinstance(kernel, GemvKernel) and kernel.staged is (rows is None)
     assert kernel.config.get("rows") == rows
@@ -3776,11 +3766,11 @@ def test_gemv_tuned_register_body_splits_two_rows_a_block(
         return SimpleNamespace(config=config)
 
     monkeypatch.setattr(GemvKernel, "tune_jit_kernel", pick)
-    test = GEMMTest(1, 257, k, torch.bfloat16, trans_b=True)
+    workload = GEMMWorkload(1, 257, k, torch.bfloat16, trans_b=True)
     op = GEMMFwdOp()
     op.request_tune()
-    op(*test.gen_inputs())
-    test.check(op, *test.gen_inputs())
+    op(*workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     (kernel,) = op._entries_built("gemm").values()
     assert isinstance(kernel, GemvKernel) and not kernel.staged and kernel.config == config
 
@@ -3803,7 +3793,7 @@ def test_gemv_register_body_keeps_the_ring_bits(per_sm: int, extra: int, k: int)
     taken in another order shows."""
     n = per_sm * get_sm_count(torch.device(run_device()).index)
     rows = (n, n + extra)
-    a, b = GEMMTest(1, max(rows), k, torch.bfloat16, trans_b=True).gen_inputs()
+    a, b = GEMMWorkload(1, max(rows), k, torch.bfloat16, trans_b=True).gen_inputs()
     outputs = []
     for count, staged in zip(rows, (False, True), strict=True):
         op = GEMMFwdOp(out_dtype=torch.float32)

@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops._kernels.gemm.call_spec import GEMMCall
 from tileops._kernels.gemm.dense import GEMMTMAKernel
 from tileops._kernels.moe import SharedExpertMLPKernel
@@ -34,7 +34,7 @@ def test_the_shared_expert_matches_its_reference(dtype):
         manifest_call("SharedExpertMLPFwdOp", {"D": dtype}, T=32, H=256, S=128)
     )
     inputs = workload.gen_inputs()
-    TestBase.check(workload, SharedExpertMLPFwdOp(), *inputs)
+    check(workload, SharedExpertMLPFwdOp(), *inputs)
 
 
 @pytest.mark.sm90
@@ -67,7 +67,7 @@ def test_the_shared_expert_runs_the_dense_template_past_its_threshold(tokens, hi
         manifest_call("SharedExpertMLPFwdOp", {"D": dtype}, T=tokens, H=hidden, S=ffn)
     )
     op = SharedExpertMLPFwdOp()
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.sm90
@@ -81,11 +81,11 @@ def test_a_published_threshold_decomposes_the_next_call_again():
     )
     op = SharedExpertMLPFwdOp()
     inputs = workload.gen_inputs()
-    TestBase.check(workload, op, *inputs)
+    check(workload, op, *inputs)
     (kernel,) = op.iter_kernels()
     (templated,) = kernel._generation.programs.values()
     kernel.config = {**kernel.config, "template_min_m": 2048}
-    TestBase.check(workload, op, *inputs)
+    check(workload, op, *inputs)
     decomposed = [p for p in kernel._generation.programs.values() if isinstance(p, tuple)]
     assert [type(k) for k in decomposed[0][:2]] != [type(k) for k in templated[:2]]
 
@@ -110,7 +110,7 @@ def test_a_published_tile_runs_as_the_basic_gemm_it_states(tokens, hidden, ffn):
     )
     op = SharedExpertMLPFwdOp()
     inputs = workload.gen_inputs()
-    TestBase.check(workload, op, *inputs)
+    check(workload, op, *inputs)
     (kernel,) = op.iter_kernels()
     (selected,) = [p for p in kernel._generation.programs.values() if isinstance(p, tuple)]
     call = GEMMCall(
@@ -121,7 +121,7 @@ def test_a_published_tile_runs_as_the_basic_gemm_it_states(tokens, hidden, ffn):
         assert selected[1].config.keys() != basic_keys
     tile = {"block_m": 128, "block_n": 64, "block_k": 64, "num_stages": 4}
     kernel.config = {**kernel.config, **tile}
-    TestBase.check(workload, op, *inputs)
+    check(workload, op, *inputs)
     (published,) = [p for p in kernel._generation.programs.values() if isinstance(p, tuple)]
     for gemm in published[:2]:
         assert gemm.config.keys() == basic_keys
@@ -142,7 +142,7 @@ def test_the_shared_expert_splits_k_at_32_tokens(hidden, ffn):
     workload = SharedExpertMLPWorkload(
         manifest_call("SharedExpertMLPFwdOp", {"D": "bfloat16"}, T=32, H=hidden, S=ffn)
     )
-    TestBase.check(workload, SharedExpertMLPFwdOp(), *workload.gen_inputs())
+    check(workload, SharedExpertMLPFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -156,7 +156,7 @@ def test_fused_moe_shared_expert_basic(num_tokens):
     workload = _workload(num_tokens, 8, K, 64, 32, S=16)
     inputs = workload.gen_inputs()
     op = FusedMoESharedExpertFwdOp(**workload.arguments())
-    TestBase.check(workload, op, *inputs)
+    check(workload, op, *inputs)
 
     _, routed_out = op(*inputs)
     assert torch.equal(routed_out, FusedMoEFwdOp(top_k=K)(*inputs[:4]))
@@ -210,7 +210,7 @@ def test_fused_moe_shared_expert_tp():
         workload = _workload(32, 8, K, 64, 32, S=16, tp_size=2, tp_rank=tp_rank)
         inputs = workload.gen_inputs()
         op = FusedMoESharedExpertFwdOp(**workload.arguments())
-        TestBase.check(workload, op, *inputs)
+        check(workload, op, *inputs)
 
         _, routed_out = op(*inputs)
         assert torch.equal(routed_out, FusedMoEFwdOp(top_k=K)(*inputs[:4]))
@@ -309,4 +309,4 @@ def test_grouped_routing_with_the_shared_expert() -> None:
     )
     workload = FusedMoESharedExpertWorkload(call)
     op = FusedMoESharedExpertFwdOp(**call.arguments())
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())

@@ -6,15 +6,11 @@ Nonzero reads as true; the result is bool.
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._kernels.elementwise import UnaryKernel
 from tileops._ops.elementwise import LogicalAndFwdOp, LogicalNotFwdOp, LogicalOrFwdOp
 from workloads.device import run_device
 from workloads.elementwise import LogicalCase, LogicalNotWorkload
-
-
-class LogicalTest(LogicalCase, TestBase):
-    pass
 
 
 class LogicalOpFixture(FixtureBase):
@@ -33,8 +29,8 @@ class LogicalOpFixture(FixtureBase):
 
 @LogicalOpFixture
 def test_logical_binary_op(op_cls, dtype: torch.dtype) -> None:
-    test = LogicalTest(4_096, dtype, op_cls.__name__)
-    test.check(op_cls(), *test.gen_inputs())
+    workload = LogicalCase(4_096, dtype, op_cls.__name__)
+    check(workload, op_cls(), *workload.gen_inputs())
 
 
 # Both ops on the bias broadcast; the other broadcast patterns on logical_and.
@@ -82,8 +78,8 @@ def test_logical_broadcast(
     a = (torch.randn(*a_shape, dtype=dtype, device=run_device()) > 0).to(dtype)
     b = (torch.randn(*b_shape, dtype=dtype, device=run_device()) > 0).to(dtype)
     op = op_cls()
-    test = LogicalTest(a.numel(), a.dtype, op_cls.__name__)
-    test.check(op, a, b)
+    workload = LogicalCase(a.numel(), a.dtype, op_cls.__name__)
+    check(workload, op, a, b)
 
 
 @pytest.mark.parametrize(
@@ -106,8 +102,8 @@ def test_logical_nan_is_true(op_cls, dtype: torch.dtype) -> None:
     b = [nan, 0.0, 1.0, nan, 0.0, 0.0, -0.0, -0.0, 1.0, 1.0, inf, inf, -tiny, 0.0, tiny]
     a = torch.tensor(a, device=run_device(), dtype=dtype)
     b = torch.tensor(b, device=run_device(), dtype=dtype)
-    test = LogicalTest(a.numel(), a.dtype, op_cls.__name__)
-    test.check(op_cls(), a, b)
+    workload = LogicalCase(a.numel(), a.dtype, op_cls.__name__)
+    check(workload, op_cls(), a, b)
 
 
 @pytest.mark.smoke
@@ -118,8 +114,8 @@ def test_logical_and_bool_broadcast() -> None:
     a = torch.randint(0, 2, a_shape, device=run_device()).to(torch.bool)
     b = torch.randint(0, 2, b_shape, device=run_device()).to(torch.bool)
     op = LogicalAndFwdOp()
-    test = LogicalTest(a.numel(), a.dtype, "LogicalAndFwdOp")
-    test.check(op, a, b)
+    workload = LogicalCase(a.numel(), a.dtype, "LogicalAndFwdOp")
+    check(workload, op, a, b)
 
 
 class LogicalFixture(FixtureBase):
@@ -141,15 +137,11 @@ class LogicalFixture(FixtureBase):
     ]
 
 
-class LogicalNotTest(LogicalNotWorkload, TestBase):
-    pass
-
-
 @LogicalFixture
 def test_logical_not(n_total: int, dtype: torch.dtype) -> None:
-    test = LogicalNotTest(n_total, dtype)
+    workload = LogicalNotWorkload(n_total, dtype)
     op = LogicalNotFwdOp()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -163,8 +155,8 @@ def test_logical_not_near_one_wave(tail: int, dtype: torch.dtype) -> None:
     n_total = 20 * resident // run * run
     if not UnaryKernel.fits_l2_budget(n_total, 2, props.L2_cache_size):
         pytest.skip("twenty elements per resident thread exceed three quarters of this L2")
-    test = LogicalNotTest(n_total + tail, dtype)
-    test.check(LogicalNotFwdOp(), *test.gen_inputs())
+    workload = LogicalNotWorkload(n_total + tail, dtype)
+    check(workload, LogicalNotFwdOp(), *workload.gen_inputs())
 
 
 # The integral and bool dtypes of the binary logical ops; the float ones are covered above.
@@ -221,5 +213,5 @@ def test_logical_int_bool_matrix(
     else:
         a, b = _gen_int_logical_inputs(n, dtype)
     op = op_cls()
-    test = LogicalTest(a.numel(), a.dtype, op_cls.__name__)
-    test.check(op, a, b)
+    workload = LogicalCase(a.numel(), a.dtype, op_cls.__name__)
+    check(workload, op, a, b)

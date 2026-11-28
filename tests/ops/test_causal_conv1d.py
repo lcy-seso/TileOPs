@@ -7,7 +7,7 @@ import torch
 from tests.cuda_graph_contract import check_replay
 from tests.misaligned import misaligned
 from tests.state_pool_guard import check_padded_slots_skipped
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops._kernels.kernel_base import Kernel
 from tileops._kernels.mamba import CausalConv1dCall, CausalConv1dUpdateCall
 from tileops.backend import OpNotAvailableError
@@ -21,15 +21,6 @@ from workloads.mamba import (
 )
 from workloads.numerics import compare_outputs
 from workloads.workload_base import manifest_call
-
-
-class CausalConv1dFwdTest(CausalConv1dFwdCall, TestBase):
-    pass
-
-
-class CausalConv1dUpdateFwdTest(CausalConv1dUpdateFwdCall, TestBase):
-    pass
-
 
 _SMOKE = pytest.mark.smoke
 _FULL = pytest.mark.full
@@ -129,9 +120,9 @@ def test_causal_conv1d(seq_lens, dim, width, dtype, some, activation) -> None:
         some=some,
         **({} if "bias" in some else {"bias": None}),
     )
-    test = CausalConv1dFwdTest(call)
+    workload = CausalConv1dFwdCall(call)
     op = CausalConv1dFwdOp(**call.arguments())
-    test.check(op, *test.gen_inputs(), runs=functools.partial(conv_state_result, op))
+    check(workload, op, *workload.gen_inputs(), runs=functools.partial(conv_state_result, op))
 
 
 _DECODE = (
@@ -155,9 +146,9 @@ def test_causal_conv1d_update(batch, dim, width, dtype, some, activation) -> Non
         activation=activation,
         some=some,
     )
-    test = CausalConv1dUpdateFwdTest(call)
+    workload = CausalConv1dUpdateFwdCall(call)
     op = CausalConv1dUpdateFwdOp(**call.arguments())
-    test.check(op, *test.gen_inputs(), runs=functools.partial(conv_state_result, op))
+    check(workload, op, *workload.gen_inputs(), runs=functools.partial(conv_state_result, op))
 
 
 # A dilated filter spans (W - 1) * dilation tokens; a float32 filter widens the arithmetic.
@@ -217,9 +208,9 @@ def test_causal_conv1d_dilation_and_float32_filters(
         **({} if "bias" in some else {"bias": None}),
         **({} if pool is None else {"P": pool}),
     )
-    test = CausalConv1dFwdTest(call)
+    workload = CausalConv1dFwdCall(call)
     op = CausalConv1dFwdOp(**call.arguments())
-    test.check(op, *test.gen_inputs(), runs=functools.partial(conv_state_result, op))
+    check(workload, op, *workload.gen_inputs(), runs=functools.partial(conv_state_result, op))
 
 
 _SERVED_DECODE = (
@@ -259,9 +250,9 @@ def test_causal_conv1d_update_dilation_and_float32_filters(
         some=some,
         **({} if pool is None else {"P": pool}),
     )
-    test = CausalConv1dUpdateFwdTest(call)
+    workload = CausalConv1dUpdateFwdCall(call)
     op = CausalConv1dUpdateFwdOp(**call.arguments())
-    test.check(op, *test.gen_inputs(), runs=functools.partial(conv_state_result, op))
+    check(workload, op, *workload.gen_inputs(), runs=functools.partial(conv_state_result, op))
 
 
 @pytest.mark.smoke
@@ -308,8 +299,8 @@ def test_prefill_bias(dtype: str, weight_dtype: str) -> None:
         seq_lens=[7, 65],
         some=["bias", "has_initial_state"],
     )
-    test = CausalConv1dFwdTest(call)
-    inputs = list(test.gen_inputs())
+    workload = CausalConv1dFwdCall(call)
+    inputs = list(workload.gen_inputs())
     bias = inputs[4]
     storage = torch.full((bias.numel() + 2,), 123, device=bias.device, dtype=bias.dtype)
     inputs[4] = storage[1:-1]
@@ -323,7 +314,7 @@ def test_prefill_bias(dtype: str, weight_dtype: str) -> None:
         torch.testing.assert_close(storage, original, rtol=0, atol=0)
         return result
 
-    test.check(op, *inputs, runs=run)
+    check(workload, op, *inputs, runs=run)
 
 
 def _x_layout(x: torch.Tensor, layout: str, row: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -377,8 +368,8 @@ def test_prefill_reads_strided_tokens(seq_lens, dim, layout, row, some) -> None:
         **({"P": 8} if "cache_indices" in some else {}),
         **({} if "bias" in some else {"bias": None}),
     )
-    test = CausalConv1dFwdTest(call)
-    inputs = list(test.gen_inputs())
+    workload = CausalConv1dFwdCall(call)
+    inputs = list(workload.gen_inputs())
     inputs[0], storage = _x_layout(inputs[0], layout, row)
     original = storage.clone()
     op = CausalConv1dFwdOp(**call.arguments())
@@ -388,7 +379,7 @@ def test_prefill_reads_strided_tokens(seq_lens, dim, layout, row, some) -> None:
         torch.testing.assert_close(storage, original, rtol=0, atol=0)
         return result
 
-    test.check(op, *inputs, runs=run)
+    check(workload, op, *inputs, runs=run)
 
 
 _POOLED_PREFILL = (
@@ -418,9 +409,9 @@ def test_causal_conv1d_reads_and_writes_its_slots_of_a_state_pool(seq_lens, dim,
         seq_lens=seq_lens,
         some=["bias", "has_initial_state", "cache_indices"],
     )
-    test = CausalConv1dFwdTest(call)
+    workload = CausalConv1dFwdCall(call)
     op = CausalConv1dFwdOp(**call.arguments())
-    test.check(op, *test.gen_inputs(), runs=functools.partial(conv_state_result, op))
+    check(workload, op, *workload.gen_inputs(), runs=functools.partial(conv_state_result, op))
 
 
 @pytest.mark.smoke
@@ -437,9 +428,9 @@ def test_causal_conv1d_update_advances_its_slots_of_a_state_pool() -> None:
         P=256,
         some=["bias", "conv_state_indices"],
     )
-    test = CausalConv1dUpdateFwdTest(call)
+    workload = CausalConv1dUpdateFwdCall(call)
     op = CausalConv1dUpdateFwdOp(**call.arguments())
-    test.check(op, *test.gen_inputs(), runs=functools.partial(conv_state_result, op))
+    check(workload, op, *workload.gen_inputs(), runs=functools.partial(conv_state_result, op))
 
 
 _DILATED = {"D": 100, "W": 4, "L": 12, "P": 4, "dilation": 3, "activation": None}
@@ -451,7 +442,7 @@ _DILATED = {"D": 100, "W": 4, "L": 12, "P": 4, "dilation": 3, "activation": None
     [
         pytest.param(
             CausalConv1dFwdOp,
-            CausalConv1dFwdTest,
+            CausalConv1dFwdCall,
             "float32",
             {
                 **_DILATED,
@@ -464,7 +455,7 @@ _DILATED = {"D": 100, "W": 4, "L": 12, "P": 4, "dilation": 3, "activation": None
         ),
         pytest.param(
             CausalConv1dUpdateFwdOp,
-            CausalConv1dUpdateFwdTest,
+            CausalConv1dUpdateFwdCall,
             "float32",
             {**_DILATED, "B": 2, "some": ["bias", "conv_state_indices"]},
             marks=[_FULL, pytest.mark.cuda_graph(op="CausalConv1dUpdateFwdOp")],
@@ -472,7 +463,7 @@ _DILATED = {"D": 100, "W": 4, "L": 12, "P": 4, "dilation": 3, "activation": None
         ),
         pytest.param(
             CausalConv1dUpdateFwdOp,
-            CausalConv1dUpdateFwdTest,
+            CausalConv1dUpdateFwdCall,
             "bfloat16",
             {"B": 1, "D": 10240, "W": 4, "L": 3},
             marks=[_FULL, pytest.mark.cuda_graph(op="CausalConv1dUpdateFwdOp")],
@@ -483,8 +474,8 @@ _DILATED = {"D": 100, "W": 4, "L": 12, "P": 4, "dilation": 3, "activation": None
 def test_causal_conv1d_graph_replay(op_type, workload_type, weight, row) -> None:
     """Replay reads changed tokens, filters and slots at their captured addresses."""
     call = manifest_call(op_type.__name__, {"T": "bfloat16", "Tw": weight}, **row)
-    test = workload_type(call)
-    inputs = test.gen_inputs()
+    workload = workload_type(call)
+    inputs = workload.gen_inputs()
     slots = inputs[6] if op_type is CausalConv1dFwdOp else inputs[4]
     if slots is not None:
         slots.copy_(slots.roll(1))
@@ -492,7 +483,7 @@ def test_causal_conv1d_graph_replay(op_type, workload_type, weight, row) -> None
         bounds, initial = inputs[3], inputs[5]
         bounds.copy_(bounds[-1] - bounds.flip(0))
         initial.logical_not_()
-    check_replay(test, op_type(**call.arguments()), inputs, result=conv_state_result)
+    check_replay(workload, op_type(**call.arguments()), inputs, result=conv_state_result)
 
 
 _ROLLBACK = (
@@ -536,13 +527,13 @@ def test_causal_conv1d_update_verifies_drafts_from_the_accepted_column(
         some=["conv_state_indices", "num_accepted_tokens", "query_start_loc", *some],
         **({} if "bias" in some else {"bias": None}),
     )
-    test = CausalConv1dUpdateFwdTest(call)
+    workload = CausalConv1dUpdateFwdCall(call)
     op = CausalConv1dUpdateFwdOp(**call.arguments())
-    inputs = list(test.gen_inputs())
+    inputs = list(workload.gen_inputs())
     inputs[5] = torch.randint(1, max(seq_lens) + 1, inputs[5].shape, dtype=torch.int32).to(
         inputs[5].device
     )
-    test.check(op, *inputs, runs=functools.partial(conv_state_result, op))
+    check(workload, op, *inputs, runs=functools.partial(conv_state_result, op))
 
 
 @pytest.mark.smoke
@@ -561,11 +552,11 @@ def test_causal_conv1d_update_resumes_one_token_from_the_accepted_column() -> No
         some=["num_accepted_tokens"],
         bias=None,
     )
-    test = CausalConv1dUpdateFwdTest(call)
+    workload = CausalConv1dUpdateFwdCall(call)
     op = CausalConv1dUpdateFwdOp(**call.arguments())
-    inputs = list(test.gen_inputs())
+    inputs = list(workload.gen_inputs())
     inputs[5] = torch.randint(1, 4, inputs[5].shape, dtype=torch.int32).to(inputs[5].device)
-    test.check(op, *inputs, runs=functools.partial(conv_state_result, op))
+    check(workload, op, *inputs, runs=functools.partial(conv_state_result, op))
 
 
 _PADDED_PREFILL = {"D": 264, "L": 3, "Tt": 92, "seq_lens": [1, 2, 0, 3, 5, 17, 0, 64]}
@@ -573,11 +564,11 @@ _PADDED_ROLLBACK = {"D": 264, "L": 6, "Tt": 15, "seq_lens": [4, 1, 0, 3, 2, 4, 1
 
 
 @pytest.mark.parametrize(
-    ("op_type", "test_type", "row", "some", "slots_at"),
+    ("op_type", "workload_type", "row", "some", "slots_at"),
     [
         pytest.param(
             CausalConv1dFwdOp,
-            CausalConv1dFwdTest,
+            CausalConv1dFwdCall,
             _PADDED_PREFILL,
             ["bias", "has_initial_state", "cache_indices"],
             6,
@@ -585,7 +576,7 @@ _PADDED_ROLLBACK = {"D": 264, "L": 6, "Tt": 15, "seq_lens": [4, 1, 0, 3, 2, 4, 1
         ),
         pytest.param(
             CausalConv1dUpdateFwdOp,
-            CausalConv1dUpdateFwdTest,
+            CausalConv1dUpdateFwdCall,
             {"B": 8, "D": 264, "L": 3},
             ["conv_state_indices"],
             4,
@@ -594,7 +585,7 @@ _PADDED_ROLLBACK = {"D": 264, "L": 6, "Tt": 15, "seq_lens": [4, 1, 0, 3, 2, 4, 1
         # A state row longer than one 128-byte L2 line runs the per-thread decode kernel.
         pytest.param(
             CausalConv1dUpdateFwdOp,
-            CausalConv1dUpdateFwdTest,
+            CausalConv1dUpdateFwdCall,
             {"B": 8, "D": 264, "L": 480},
             ["bias", "conv_state_indices"],
             4,
@@ -602,7 +593,7 @@ _PADDED_ROLLBACK = {"D": 264, "L": 6, "Tt": 15, "seq_lens": [4, 1, 0, 3, 2, 4, 1
         ),
         pytest.param(
             CausalConv1dUpdateFwdOp,
-            CausalConv1dUpdateFwdTest,
+            CausalConv1dUpdateFwdCall,
             {**_PADDED_ROLLBACK, "max_query_len": 4},
             ["conv_state_indices", "num_accepted_tokens", "query_start_loc"],
             4,
@@ -612,7 +603,7 @@ _PADDED_ROLLBACK = {"D": 264, "L": 6, "Tt": 15, "seq_lens": [4, 1, 0, 3, 2, 4, 1
     ids=["prefill", "update", "update-long-state", "rollback"],
 )
 def test_causal_conv1d_skips_the_states_of_negative_slots(
-    op_type, test_type, row, some, slots_at
+    op_type, workload_type, row, some, slots_at
 ) -> None:
     """Each convolution kernel writes no state for a slot of -1: the pool's neighbours
     and the slots of the padded sequences keep their states, every other slot ends as in the
@@ -621,7 +612,7 @@ def test_causal_conv1d_skips_the_states_of_negative_slots(
     call = manifest_call(
         op_type.__name__, {"T": "bfloat16", "Tw": "bfloat16"}, W=4, P=16, some=some, **row
     )
-    inputs = test_type(call).gen_inputs()
+    inputs = workload_type(call).gen_inputs()
     op = op_type(**{**call.arguments(), "validate_inputs": True})
     check_padded_slots_skipped(op, inputs, 2, slots_at, [0, 4])
 
@@ -688,11 +679,12 @@ def test_causal_conv1d_prefill_holds_a_one_wave_grid_resident(dim, dilation, run
             Tt=sum(seq_lens), seq_lens=seq_lens, dilation=dilation, some=["has_initial_state"],
             bias=None,
         )  # fmt: skip
-        test = CausalConv1dFwdTest(call)
+        workload = CausalConv1dFwdCall(call)
         op = op or CausalConv1dFwdOp(**call.arguments())
-        test.check(
+        check(
+            workload,
             op,
-            *test.gen_inputs(),
+            *workload.gen_inputs(),
             runs=functools.partial(conv_state_result, op),
         )
         held = -(-(dim // 256 * -(-sum(seq_lens) // 256)) // sms)
@@ -777,6 +769,6 @@ def test_causal_conv1d_update_holds_a_long_state_in_registers(
         some=some,
         **({} if "bias" in some else {"bias": None}),
     )
-    test = CausalConv1dUpdateFwdTest(call)
+    workload = CausalConv1dUpdateFwdCall(call)
     op = CausalConv1dUpdateFwdOp(**call.arguments())
-    test.check(op, *test.gen_inputs(), runs=functools.partial(conv_state_result, op))
+    check(workload, op, *workload.gen_inputs(), runs=functools.partial(conv_state_result, op))

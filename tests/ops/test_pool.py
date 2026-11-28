@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 from tests.compile_contract import assert_op_owns_graph_nodes, register_compile_contract
 from tests.misaligned import misaligned
-from tests.workload_test_base import FixtureBase, TestBase, op_preferring
+from tests.workload_test_base import FixtureBase, check, op_preferring
 from tileops._kernels.constants import SM_RESIDENT_BLOCKS
 from tileops._kernels.kernel_base import Kernel
 from tileops._kernels.pool import (
@@ -439,10 +439,6 @@ class AvgPool3dFixture(FixtureBase):
     ]
 
 
-class AvgPoolTest(AvgPoolWorkload, TestBase):
-    """Dim-generic avg-pool reference test (divisor_override is 2d/3d-only)."""
-
-
 def _run_avg_pool_case(
     ndim: int,
     shape: tuple[int, ...],
@@ -455,7 +451,7 @@ def _run_avg_pool_case(
     dtype: torch.dtype,
     tune: bool,
 ) -> None:
-    test = AvgPoolTest(
+    workload = AvgPoolWorkload(
         ndim,
         kernel_size,
         stride,
@@ -477,7 +473,7 @@ def _run_avg_pool_case(
     op = _AVG_POOL_OPS[ndim](**op_kwargs)
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs(*shape))
+    check(workload, op, *workload.gen_inputs(*shape))
 
 
 @AvgPool1dFixture
@@ -1147,17 +1143,17 @@ def test_avg_pool_negative_divisor_override_matches_torch(
 def test_a_pool_param_changed_after_a_call_runs_the_next_call() -> None:
     """A call reads the op's params as they are on that call, and a return to the first
     params runs them again."""
-    (x,) = AvgPoolTest(2, 2, 2, 0, False, True, 4, torch.float16).gen_inputs(1, 4, 8, 8)
+    (x,) = AvgPoolWorkload(2, 2, 2, 0, False, True, 4, torch.float16).gen_inputs(1, 4, 8, 8)
     op = AvgPool2dFwdOp(kernel_size=2, stride=2, divisor_override=4)
     op(x)
     for divisor in (2, 4):
         op.divisor_override = divisor
-        AvgPoolTest(2, 2, 2, 0, False, True, divisor, torch.float16).check(op, x)
+        check(AvgPoolWorkload(2, 2, 2, 0, False, True, divisor, torch.float16), op, x)
     op = MaxPool2dFwdOp(kernel_size=2)
     op(x)
     for kernel_size in (4, 2):
         op.kernel_size = kernel_size
-        MaxPoolTest(2, kernel_size, None, 0, 1, False, torch.float16).check(op, x)
+        check(MaxPoolWorkload(2, kernel_size, None, 0, 1, False, torch.float16), op, x)
 
 
 _MAX_POOL_OPS: dict[int, type] = {
@@ -1658,10 +1654,6 @@ class MaxPool3dFixture(FixtureBase):
     ]
 
 
-class MaxPoolTest(MaxPoolWorkload, TestBase):
-    """Dim-generic max-pool reference test."""
-
-
 def _run_max_pool_case(
     ndim: int,
     shape: tuple[int, ...],
@@ -1676,7 +1668,7 @@ def _run_max_pool_case(
 ) -> None:
     # Exercise both the plain and the return_indices op on the same config.
     for return_indices in (False, True):
-        test = MaxPoolTest(
+        workload = MaxPoolWorkload(
             ndim,
             kernel_size,
             stride,
@@ -1696,7 +1688,7 @@ def _run_max_pool_case(
         )
         if tune:
             op.request_tune()
-        test.check(op, *test.gen_inputs(*shape))
+        check(workload, op, *workload.gen_inputs(*shape))
 
 
 @MaxPool1dFixture
@@ -2369,14 +2361,6 @@ class AdaptiveMaxPool2dFixture(FixtureBase):
     ]
 
 
-class AdaptiveAvgPool2dTest(AdaptiveAvgPool2dWorkload, TestBase):
-    """Adaptive avg-pool reference test."""
-
-
-class AdaptiveMaxPool2dTest(AdaptiveMaxPool2dWorkload, TestBase):
-    """Adaptive max-pool reference test, with or without indices."""
-
-
 @AdaptiveAvgPool2dFixture
 def test_adaptive_avg_pool2d(
     n: int,
@@ -2387,11 +2371,11 @@ def test_adaptive_avg_pool2d(
     dtype: torch.dtype,
     tune: bool,
 ) -> None:
-    test = AdaptiveAvgPool2dTest(n, c_in, h_in, w_in, output_size, dtype)
+    workload = AdaptiveAvgPool2dWorkload(n, c_in, h_in, w_in, output_size, dtype)
     op = AdaptiveAvgPool2dFwdOp(output_size)
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @AdaptiveMaxPool2dFixture
@@ -2406,14 +2390,14 @@ def test_adaptive_max_pool2d(
 ) -> None:
     # Exercise both the plain and the return_indices op on the same config.
     for return_indices in (False, True):
-        test = AdaptiveMaxPool2dTest(
+        workload = AdaptiveMaxPool2dWorkload(
             n, c_in, h_in, w_in, output_size, dtype, return_indices=return_indices
         )
         op_cls = AdaptiveMaxPool2dIndicesFwdOp if return_indices else AdaptiveMaxPool2dFwdOp
         op = op_cls(output_size)
         if tune:
             op.request_tune()
-        test.check(op, *test.gen_inputs())
+        check(workload, op, *workload.gen_inputs())
 
 
 _ADAPTIVE_POOL_COMPILE_CASES = [
@@ -2496,10 +2480,10 @@ def test_adaptive_avg_pool2d_lanes_follow_window_and_device() -> None:
 def test_adaptive_avg_pool2d_misaligned_view() -> None:
     """A contiguous view two bytes past a 16-byte boundary pools like an aligned tensor: the
     lane kernel's 16-byte loads of this global window read an aligned copy."""
-    test = AdaptiveAvgPool2dTest(2, 64, 56, 56, (1, 1), torch.float16)
+    workload = AdaptiveAvgPool2dWorkload(2, 64, 56, 56, (1, 1), torch.float16)
     x = misaligned(torch.randn(2, 64, 56, 56, device=run_device(), dtype=torch.float16))
     assert x.data_ptr() % 16 != 0
-    test.check(AdaptiveAvgPool2dFwdOp(output_size=test.output_size), x)
+    check(workload, AdaptiveAvgPool2dFwdOp(output_size=workload.output_size), x)
 
 
 @pytest.mark.parametrize(
@@ -2517,18 +2501,20 @@ def test_adaptive_pool2d_bin_products_past_int32(op_cls) -> None:
     """
     args = (1, 1, 150001, 16, (100000, 1), torch.float16)
     if op_cls is AdaptiveAvgPool2dFwdOp:
-        test = AdaptiveAvgPool2dTest(*args)
+        workload = AdaptiveAvgPool2dWorkload(*args)
     else:
-        test = AdaptiveMaxPool2dTest(*args, return_indices=op_cls is AdaptiveMaxPool2dIndicesFwdOp)
-    (x,) = test.gen_inputs()
-    out = op_cls(output_size=test.output_size)(x)
-    ref = test.ref_program(x.cpu())
+        workload = AdaptiveMaxPool2dWorkload(
+            *args, return_indices=op_cls is AdaptiveMaxPool2dIndicesFwdOp
+        )
+    (x,) = workload.gen_inputs()
+    out = op_cls(output_size=workload.output_size)(x)
+    ref = workload.ref_program(x.cpu())
     for got, expected in zip(
         out if isinstance(out, tuple) else (out,),
         ref if isinstance(ref, tuple) else (ref,),
         strict=True,
     ):
-        compare_outputs(got.cpu(), expected, test.verification(x))
+        compare_outputs(got.cpu(), expected, workload.verification(x))
 
 
 @pytest.mark.smoke
@@ -2819,10 +2805,6 @@ def test_max_pool2d_indices_windows_read_into_registers(
     assert torch.equal(indices, expected_indices)
 
 
-class MeanPoolingTest(MeanPoolingWorkload, TestBase):
-    pass
-
-
 class MeanPoolingFixture(FixtureBase):
     PARAMS = [
         (
@@ -2869,7 +2851,7 @@ def test_mean_pooling_op(
     tune: bool,
     seq_lens: list[int] | None,
 ) -> None:
-    test = MeanPoolingTest(
+    workload = MeanPoolingWorkload(
         batch=batch,
         seq_len=seq_len,
         heads=heads,
@@ -2881,7 +2863,7 @@ def test_mean_pooling_op(
     op = MeanPoolingFwdOp(chunk_size=chunk_size, accum_dtype=torch.float32)
     if tune:
         op.request_tune()
-    inputs = list(test.gen_inputs())
+    inputs = list(workload.gen_inputs())
     if seq_lens is not None:
         # Output rows follow the caller's chunk order, not the canonical one.
         inputs[2] = inputs[2].flip(0).contiguous()
@@ -2895,9 +2877,9 @@ def test_mean_pooling_op(
         with torch.cuda.graph(graph):
             output = op(*inputs)
         graph.replay()
-        test.check(op, *inputs, runs=lambda *args: output)
+        check(workload, op, *inputs, runs=lambda *args: output)
     else:
-        test.check(op, *inputs)
+        check(workload, op, *inputs)
 
 
 @pytest.mark.smoke
@@ -2910,7 +2892,7 @@ def test_mean_pooling_dim_not_one_full_tile(dim: int) -> None:
     divide. The range the manifest rules out between them is a contract bound, not a shape
     the kernel cannot read.
     """
-    test = MeanPoolingTest(
+    workload = MeanPoolingWorkload(
         batch=1,
         seq_len=64,
         heads=2,
@@ -2919,7 +2901,7 @@ def test_mean_pooling_dim_not_one_full_tile(dim: int) -> None:
         dtype=torch.float16,
     )
     op = MeanPoolingFwdOp(chunk_size=32, accum_dtype=torch.float32)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke

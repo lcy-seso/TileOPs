@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._ops.sequence_modeling.engram import EngramGateConvBwdOp, EngramGateConvFwdOp
 from tileops._ops.sequence_modeling.engram_decode import EngramDecodeFwdOp
 from workloads.device import run_device
@@ -11,10 +11,6 @@ from workloads.sequence_modeling.engram import (
     EngramGateConvFwdWorkload,
     engram_decode_step_torch,
 )
-
-
-class EngramGateConvFwdTest(EngramGateConvFwdWorkload, TestBase):
-    pass
 
 
 class EngramGateConvFwdFixture(FixtureBase):
@@ -39,12 +35,8 @@ class EngramGateConvFwdFixture(FixtureBase):
 
 @EngramGateConvFwdFixture
 def test_engram_gate_conv_fwd(M, seq_len, d, dtype):
-    test = EngramGateConvFwdTest(M, seq_len, d, dtype)
-    test.check(EngramGateConvFwdOp(), *test.gen_inputs())
-
-
-class EngramGateConvBwdTest(EngramGateConvBwdWorkload, TestBase):
-    pass
+    workload = EngramGateConvFwdWorkload(M, seq_len, d, dtype)
+    check(workload, EngramGateConvFwdOp(), *workload.gen_inputs())
 
 
 class EngramGateConvBwdFixture(FixtureBase):
@@ -71,10 +63,10 @@ class EngramGateConvBwdFixture(FixtureBase):
 
 @EngramGateConvBwdFixture
 def test_engram_gate_conv_bwd(M, seq_len, d, dtype):
-    test = EngramGateConvBwdTest(M, seq_len, d, dtype)
+    workload = EngramGateConvBwdWorkload(M, seq_len, d, dtype)
     op = EngramGateConvBwdOp()
-    inputs = test.gen_inputs()
-    test.check(op, *inputs)
+    inputs = workload.gen_inputs()
+    check(workload, op, *inputs)
     run1 = [o.clone() for o in op(*inputs)]
     run2 = [o.clone() for o in op(*inputs)]
     for i, name in ((0, "dH"), (1, "dk"), (2, "dv")):
@@ -94,18 +86,14 @@ def test_engram_gate_conv_bwd(M, seq_len, d, dtype):
 def test_engram_gate_conv_bwd_dconv_w_keeps_nonfinite_like_torch(value) -> None:
     # 9 tokens split into two dconv_w runs of 5: the last step of the second run lies
     # past the last token and must add nothing, not zero times an infinite gradient.
-    test = EngramGateConvBwdTest(1, 9, 256, torch.float16)
+    workload = EngramGateConvBwdWorkload(1, 9, 256, torch.float16)
     op = EngramGateConvBwdOp()
-    inputs = list(test.gen_inputs())
+    inputs = list(workload.gen_inputs())
     inputs[0][0, -1, :] = value
     actual = op(*inputs)[-1]
-    expected = test.ref_program(*inputs)[-1]
+    expected = workload.ref_program(*inputs)[-1]
     for kind in (torch.isposinf, torch.isneginf, torch.isnan):
         assert torch.equal(kind(actual), kind(expected)), kind.__name__
-
-
-class EngramDecodeTest(EngramDecodeWorkload, TestBase):
-    pass
 
 
 class EngramDecodeFixture(FixtureBase):
@@ -126,12 +114,14 @@ class EngramDecodeFixture(FixtureBase):
 
 @EngramDecodeFixture
 def test_engram_decode(batch, d_mem, d, max_conv_len, conv_kernel_size, dilation, dtype, tune):
-    test = EngramDecodeTest(batch, d_mem, d, max_conv_len, conv_kernel_size, dilation, dtype)
+    workload = EngramDecodeWorkload(
+        batch, d_mem, d, max_conv_len, conv_kernel_size, dilation, dtype
+    )
     op = EngramDecodeFwdOp(max_conv_len, conv_kernel_size, dilation)
     if tune:
         op.request_tune()
-    inputs = test.gen_inputs()
-    test.check(op, *inputs)
+    inputs = workload.gen_inputs()
+    check(workload, op, *inputs)
 
 
 @pytest.mark.smoke
@@ -144,13 +134,13 @@ def test_engram_split_decode_left_pads_short_history():
     from tileops.backend import BUILTIN
     from workloads.numerics import compare_outputs
 
-    test = EngramDecodeTest(1, 512, 256, 12, 4, 3, torch.float16, conv_len=5)
-    e_t, h_t, state, *weights = test.gen_inputs()
+    workload = EngramDecodeWorkload(1, 512, 256, 12, 4, 3, torch.float16, conv_len=5)
+    e_t, h_t, state, *weights = workload.gen_inputs()
     op = EngramDecodeFwdOp(12, 4, 3, target=BUILTIN)
     inputs = (e_t, h_t, state, *weights)
     expected_state = F.pad(state, (0, 0, 12 - state.shape[1], 0))
-    expected = test.ref_program(e_t, h_t, expected_state, *weights)
-    compare_outputs(op(*inputs), expected, test.verification(*inputs))
+    expected = workload.ref_program(e_t, h_t, expected_state, *weights)
+    compare_outputs(op(*inputs), expected, workload.verification(*inputs))
     assert [type(k) for k in op.iter_kernels()] == [EngramDecodeSplitKernel]
 
 

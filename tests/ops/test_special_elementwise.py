@@ -4,7 +4,7 @@ alibi and sinusoidal."""
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._ops.elementwise import (
     AlibiFwdOp,
     ClampFwdOp,
@@ -25,18 +25,14 @@ from workloads.elementwise import (
 )
 
 
-class SpecialTest(SpecialCase, TestBase):
-    pass
-
-
 def _make_special_test(n_total, dtype, op_cls, gen_fn=None) -> None:
-    test = SpecialTest(n_total, dtype, op_cls.__name__, gen_fn=gen_fn)
+    workload = SpecialCase(n_total, dtype, op_cls.__name__, gen_fn=gen_fn)
     op = op_cls()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 def _check_masked_fill(x, mask, value) -> None:
-    TestBase.check(
+    check(
         ElementwiseWorkload("MaskedFillFwdOp", (x, mask, value)), MaskedFillFwdOp(), x, mask, value
     )
 
@@ -140,10 +136,10 @@ def test_isinf_encodings(n_total: int, dtype: torch.dtype) -> None:
 @pytest.mark.smoke
 def test_isinf_tuned() -> None:
     """Tuned mode picks a launch whose result matches the reference."""
-    test = SpecialTest(1_048_576, torch.bfloat16, "IsinfFwdOp", gen_fn=_cycled_encodings)
+    workload = SpecialCase(1_048_576, torch.bfloat16, "IsinfFwdOp", gen_fn=_cycled_encodings)
     op = IsinfFwdOp()
     op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 class IndependentFixture(FixtureBase):
@@ -166,7 +162,7 @@ def test_where(n_total: int, dtype: torch.dtype) -> None:
     cond = torch.randint(0, 2, (n_total,), device=run_device()).bool()
     x = torch.randn(n_total, device=run_device(), dtype=dtype)
     y = torch.randn(n_total, device=run_device(), dtype=dtype)
-    TestBase.check(ElementwiseWorkload("WhereFwdOp", (cond, x, y)), WhereFwdOp(), cond, x, y)
+    check(ElementwiseWorkload("WhereFwdOp", (cond, x, y)), WhereFwdOp(), cond, x, y)
 
 
 @IndependentFixture
@@ -184,7 +180,7 @@ def test_nan_to_num(n_total: int, dtype: torch.dtype) -> None:
     x[quarter : 2 * quarter] = float("inf")
     x[2 * quarter : 3 * quarter] = float("-inf")
     params = dict(nan=0.0, posinf=1e4, neginf=-1e4)
-    TestBase.check(ElementwiseWorkload("NanToNumFwdOp", (x,), **params), NanToNumFwdOp(**params), x)
+    check(ElementwiseWorkload("NanToNumFwdOp", (x,), **params), NanToNumFwdOp(**params), x)
 
 
 @pytest.mark.parametrize(
@@ -202,7 +198,7 @@ def test_nan_to_num_ragged(tune: bool) -> None:
     op = NanToNumFwdOp(**params)
     if tune:
         op.request_tune()
-    TestBase.check(ElementwiseWorkload("NanToNumFwdOp", (x,), **params), op, x)
+    check(ElementwiseWorkload("NanToNumFwdOp", (x,), **params), op, x)
 
 
 class AlibiFixture(FixtureBase):
@@ -220,7 +216,7 @@ class AlibiFixture(FixtureBase):
 @AlibiFixture
 def test_alibi(seq_len: int, num_heads: int, dtype: torch.dtype) -> None:
     params = dict(seq_len=seq_len, num_heads=num_heads, out_dtype=dtype, device=run_device())
-    TestBase.check(ElementwiseWorkload("AlibiFwdOp", (), **params), AlibiFwdOp(**params))
+    check(ElementwiseWorkload("AlibiFwdOp", (), **params), AlibiFwdOp(**params))
 
 
 class SinusoidalFixture(FixtureBase):
@@ -240,7 +236,7 @@ class SinusoidalFixture(FixtureBase):
 @SinusoidalFixture
 def test_sinusoidal(seq_len: int, d_model: int, dtype: torch.dtype) -> None:
     params = dict(seq_len=seq_len, d_model=d_model, out_dtype=dtype, device=run_device())
-    TestBase.check(ElementwiseWorkload("SinusoidalFwdOp", (), **params), SinusoidalFwdOp(**params))
+    check(ElementwiseWorkload("SinusoidalFwdOp", (), **params), SinusoidalFwdOp(**params))
 
 
 class ClampDtypeSizeFixture(FixtureBase):
@@ -260,7 +256,7 @@ class ClampDtypeSizeFixture(FixtureBase):
 @ClampDtypeSizeFixture
 def test_clamp_dtype_size(n_total: int, dtype: torch.dtype) -> None:
     x = torch.randn(n_total, device=run_device(), dtype=dtype)
-    TestBase.check(ElementwiseWorkload("ClampFwdOp", (x, -0.5, 0.5)), ClampFwdOp(), x, -0.5, 0.5)
+    check(ElementwiseWorkload("ClampFwdOp", (x, -0.5, 0.5)), ClampFwdOp(), x, -0.5, 0.5)
 
 
 @pytest.mark.smoke
@@ -275,7 +271,7 @@ def test_clamp_dtype_size(n_total: int, dtype: torch.dtype) -> None:
 def test_clamp_bounds(lo, hi) -> None:
     """min > max gives max everywhere, and an omitted bound is not applied, as torch.clamp."""
     x = torch.randn(4096, device=run_device(), dtype=torch.float32)
-    TestBase.check(ElementwiseWorkload("ClampFwdOp", (x, lo, hi)), ClampFwdOp(), x, lo, hi)
+    check(ElementwiseWorkload("ClampFwdOp", (x, lo, hi)), ClampFwdOp(), x, lo, hi)
 
 
 _NAN = float("nan")
@@ -307,7 +303,7 @@ def test_clamp_family_propagates_nan_like_torch(op_cls, bounds, kwargs: dict) ->
         inputs = (x,)
     workload = ElementwiseWorkload(op_cls.__name__, inputs)
     assert torch.isnan(workload.ref_program(*inputs)).any()
-    TestBase.check(workload, op_cls(), *inputs)
+    check(workload, op_cls(), *inputs)
 
 
 @pytest.mark.smoke
@@ -316,7 +312,7 @@ def test_nan_to_num_stores_an_out_of_range_replacement_as_inf() -> None:
     x = torch.tensor([float("nan"), float("inf"), float("-inf"), 1.0] * 256, device=run_device())
     x = x.to(torch.float16)
     params = dict(nan=1e6, posinf=1e6, neginf=-1e6)
-    TestBase.check(ElementwiseWorkload("NanToNumFwdOp", (x,), **params), NanToNumFwdOp(**params), x)
+    check(ElementwiseWorkload("NanToNumFwdOp", (x,), **params), NanToNumFwdOp(**params), x)
 
 
 @pytest.mark.smoke
@@ -521,4 +517,4 @@ def test_where_accepts_manifest_dtypes(dtype: torch.dtype) -> None:
     inp = torch.randn(shape, device=run_device(), dtype=dtype)
     other = torch.randn(shape, device=run_device(), dtype=dtype)
     workload = ElementwiseWorkload("WhereFwdOp", (cond, inp, other))
-    TestBase.check(workload, WhereFwdOp(), cond, inp, other)
+    check(workload, WhereFwdOp(), cond, inp, other)

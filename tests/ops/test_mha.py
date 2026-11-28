@@ -3,15 +3,11 @@
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops.attention import MHAPagedFwdOp
 from tileops.backend import OpNotAvailableError
 from workloads.attention.mha import MHADecodePagedWorkload
 from workloads.numerics import compare_outputs
-
-
-class MHADecodePagedTest(MHADecodePagedWorkload, TestBase):
-    pass
 
 
 class MHADecodePagedFixture(FixtureBase):
@@ -111,11 +107,13 @@ def test_mha_decode_paged_op(
     dtype: torch.dtype,
     tune: bool,
 ) -> None:
-    test = MHADecodePagedTest(batch, heads, seqlen_q, seqlen_kv, dim, page_size, is_causal, dtype)
+    workload = MHADecodePagedWorkload(
+        batch, heads, seqlen_q, seqlen_kv, dim, page_size, is_causal, dtype
+    )
     op = MHAPagedFwdOp(page_size=page_size, is_causal=is_causal)
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -150,10 +148,10 @@ def test_mha_decode_paged_without_wgmma_drops_unread_rows() -> None:
 
 def _check_partly_filled_cache(seqlen_q: int, is_causal: bool, real_lengths: list) -> None:
     batch, heads, seqlen_kv, dim, page_size = len(real_lengths), 8, 1024, 64, 256
-    test = MHADecodePagedTest(
+    workload = MHADecodePagedWorkload(
         batch, heads, seqlen_q, seqlen_kv, dim, page_size, is_causal, torch.float16
     )
-    q, k, v, block_table, _full = test.gen_inputs()
+    q, k, v, block_table, _full = workload.gen_inputs()
     cache_seqlens = torch.tensor(real_lengths, dtype=torch.int32, device=q.device)
     pos = torch.arange(block_table.shape[1] * page_size, device=q.device)
     rows = block_table[:, pos // page_size] * page_size + pos % page_size
@@ -167,7 +165,7 @@ def _check_partly_filled_cache(seqlen_q: int, is_causal: bool, real_lengths: lis
 
     assert torch.isfinite(output).all(), "output is not finite for a partly filled cache"
     compare_outputs(
-        output, test.ref_program(q, k, v, block_table, cache_seqlens), test.verification(q)
+        output, workload.ref_program(q, k, v, block_table, cache_seqlens), workload.verification(q)
     )
 
 
@@ -176,21 +174,21 @@ def _check_partly_filled_cache(seqlen_q: int, is_causal: bool, real_lengths: lis
 def test_mha_decode_paged_wide_head_on_long_pages() -> None:
     """An SM90 block's shared memory holds no ring of the tallest key tile a 256-row page
     allows at head dim 256, so the warp-specialized kernel stages shorter tiles."""
-    test = MHADecodePagedTest(2, 4, 4, 1024, 256, 256, True, torch.float16)
-    test.check(MHAPagedFwdOp(page_size=256, is_causal=True), *test.gen_inputs())
+    workload = MHADecodePagedWorkload(2, 4, 4, 1024, 256, 256, True, torch.float16)
+    check(workload, MHAPagedFwdOp(page_size=256, is_causal=True), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_mha_decode_paged_table_width_is_independent_of_pool() -> None:
-    test = MHADecodePagedTest(2, 8, 1, 1024, 64, 256, False, torch.float16)
-    q, k, v, table, lengths = test.gen_inputs()
+    workload = MHADecodePagedWorkload(2, 8, 1, 1024, 64, 256, False, torch.float16)
+    q, k, v, table, lengths = workload.gen_inputs()
     lengths.fill_(512)
     op = MHAPagedFwdOp(page_size=256)
     for width in (2, 4):
         block_table = table[:, :width].contiguous()
         output = op(q, k, v, block_table, lengths)
         compare_outputs(
-            output, test.ref_program(q, k, v, block_table, lengths), test.verification(q)
+            output, workload.ref_program(q, k, v, block_table, lengths), workload.verification(q)
         )
 
 
@@ -222,12 +220,20 @@ def test_mha_decode_paged_wide_head(
 ) -> None:
     """The general kernel serves head dims past 128 that its shared memory holds."""
     is_causal = seqlen_q > 1
-    test = MHADecodePagedTest(batch, heads, seqlen_q, seqlen_kv, dim, page_size, is_causal, dtype)
-    q, k, v, block_table, lengths = test.gen_inputs()
+    workload = MHADecodePagedWorkload(
+        batch, heads, seqlen_q, seqlen_kv, dim, page_size, is_causal, dtype
+    )
+    q, k, v, block_table, lengths = workload.gen_inputs()
     if real_lengths is not None:
         lengths = torch.tensor(real_lengths, dtype=torch.int32, device=q.device)
-    test.check(
-        MHAPagedFwdOp(page_size=page_size, is_causal=is_causal), q, k, v, block_table, lengths
+    check(
+        workload,
+        MHAPagedFwdOp(page_size=page_size, is_causal=is_causal),
+        q,
+        k,
+        v,
+        block_table,
+        lengths,
     )
 
 
@@ -248,10 +254,10 @@ def test_mha_decode_paged_sm90_shared_memory(
     """SM90 copies key and value tiles through the tensor memory accelerator, which gives
     the tail tiles buffers of their own and aligns every buffer to its swizzled layout."""
     is_causal = seqlen_q > 1
-    test = MHADecodePagedTest(
+    workload = MHADecodePagedWorkload(
         batch, heads, seqlen_q, seqlen_kv, dim, page_size, is_causal, torch.float16
     )
-    test.check(MHAPagedFwdOp(page_size=page_size, is_causal=is_causal), *test.gen_inputs())
+    check(workload, MHAPagedFwdOp(page_size=page_size, is_causal=is_causal), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -261,8 +267,8 @@ def test_mha_decode_paged_sm90_shared_memory(
 def test_mha_decode_paged_widest_head_dim(dim: int) -> None:
     """SM80 and SM89 blocks hold less shared memory than SM90's but copy without the tensor
     memory accelerator's separate tail buffers, so the widest head dim each serves builds."""
-    test = MHADecodePagedTest(1, 2, 1, 256, dim, 16, False, torch.float16)
-    test.check(MHAPagedFwdOp(page_size=16), *test.gen_inputs())
+    workload = MHADecodePagedWorkload(1, 2, 1, 256, dim, 16, False, torch.float16)
+    check(workload, MHAPagedFwdOp(page_size=16), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -279,9 +285,9 @@ def test_mha_decode_paged_refuses_a_head_dim(dim: int, reason: str) -> None:
     general kernel contracts it in 16-wide matrix-multiply-accumulate (MMA) k-slices, up to
     the head dim whose narrowest tiles still fit a block's shared memory.
     """
-    test = MHADecodePagedTest(1, 8, 1, 1024, dim, 256, False, torch.float16)
+    workload = MHADecodePagedWorkload(1, 8, 1, 1024, dim, 256, False, torch.float16)
     op = MHAPagedFwdOp(page_size=256)
     with pytest.raises(OpNotAvailableError, match=reason):
-        op(*test.gen_inputs())
+        op(*workload.gen_inputs())
     for interface in MHAPagedFwdOp.interfaces:
         assert not op._entries_built(interface)

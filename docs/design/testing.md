@@ -4,11 +4,11 @@
 
 ## Core Abstractions
 
-| Class             | Role                                                                                                                              |
+| Name              | Role                                                                                                                              |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `WorkloadBase`    | Declares `gen_inputs()` and `verification(*inputs)`. A concrete operator workload adds `ref_program()` and owns numerical policy. |
 | `FixtureBase`     | Applies `pytest.mark.parametrize` from a `PARAMS` attribute or a `get_params()` classmethod.                                      |
-| `TestBase`        | Adds `check()`, which runs the shared verifier under pytest.                                                                      |
+| `check()`         | Runs the shared verifier under pytest on a workload and the op under test.                                                        |
 | `bench.Runner`    | Verifies, times and records the TileOps op and the implementations compared with it on one `bench.Case`.                          |
 | `BenchmarkReport` | Collects every row and writes the report.                                                                                         |
 
@@ -19,7 +19,7 @@ A workload is defined once. A test and a benchmark each use it, and never each o
 | Layer                         | Holds                                                                                                                                                           |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Workload (`workloads/`)       | `ref_program()`, `verification(*inputs)`, the input construction the manifest rows do not fix, and the workload of each op's manifest call (`workloads/calls/`) |
-| Test (`tests/ops/`)           | `(Workload, TestBase)`; no reference and no numerical override                                                                                                  |
+| Test (`tests/ops/`)           | `check(workload, op, *inputs)`; no reference and no numerical override                                                                                          |
 | Benchmark (`benchmarks/ops/`) | `bench.Runner(op, case).compare({...})` over `bench.cases(Op)`                                                                                                  |
 
 - A benchmark imports workloads, never tests.
@@ -31,7 +31,7 @@ A workload is defined once. A test and a benchmark each use it, and never each o
 
 → Boundary: [layer-boundaries.md §Test](layer-boundaries.md#test)
 
-**Framework:** pytest. A test function decorated by its fixture calls `test.check(op, *test.gen_inputs())`.
+**Framework:** pytest. A test function decorated by its fixture calls `check(test, op, *test.gen_inputs())`.
 
 **Contract:** the ops are the external interface. A test guards what an op call promises for the inputs and parameters a caller can pass, tuned mode (`request_tune()`) included. A direct kernel call or a config handed to an in-tree kernel is promised nothing, and no test exercises it. The exception is a call-protocol test: it may publish a configuration on a kernel the op reached, because publication is what it tests ([ops-design.md § Call protocol](ops-design.md#call-protocol)).
 

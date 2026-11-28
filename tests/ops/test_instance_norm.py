@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 
 from tests.misaligned import misaligned
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._kernels.norm import InstanceNormFwdTrainKernel, InstanceNormFwdTrainSingleKernel
 from tileops._ops._signature_codegen import CheckError
 from tileops._ops.norm.instance_norm import InstanceNormFwdOp
@@ -22,18 +22,6 @@ from workloads.norm import (
 from workloads.numerics import compare_outputs, reference_tolerance
 
 
-class InstanceNormTest(InstanceNormWorkload, TestBase):
-    pass
-
-
-class InstanceNormFarFromZeroTest(InstanceNormFarFromZeroWorkload, TestBase):
-    pass
-
-
-class InstanceNormOutlierTest(InstanceNormOutlierWorkload, TestBase):
-    pass
-
-
 @pytest.mark.parametrize(
     "spatial, dtype, row",
     [
@@ -48,8 +36,8 @@ class InstanceNormOutlierTest(InstanceNormOutlierWorkload, TestBase):
     ],
 )
 def test_instance_norm_normalizes_rows_far_from_zero(spatial, dtype, row) -> None:
-    test = InstanceNormFarFromZeroTest(2, 3, spatial, dtype, row=row)
-    test.check(InstanceNormFwdOp(), *test.gen_inputs())
+    workload = InstanceNormFarFromZeroWorkload(2, 3, spatial, dtype, row=row)
+    check(workload, InstanceNormFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -72,10 +60,10 @@ def test_instance_norm_normalizes_rows_far_from_zero(spatial, dtype, row) -> Non
     ],
 )
 def test_instance_norm_trains_on_rows_led_by_an_outlier(n, spatial, kernel, path) -> None:
-    test = InstanceNormOutlierTest(n, 3, spatial, torch.float32)
-    x, mean, var, weight, bias = test.gen_inputs()
+    workload = InstanceNormOutlierWorkload(n, 3, spatial, torch.float32)
+    x, mean, var, weight, bias = workload.gen_inputs()
     op = InstanceNormFwdOp()
-    test.check(op, x, mean.clone(), var.clone(), weight, bias)
+    check(workload, op, x, mean.clone(), var.clone(), weight, bias)
     (built,) = op.iter_kernels()
     if built._warp_row_vector() is not None:
         body = "warp"
@@ -266,9 +254,9 @@ class InstanceNormFixture(FixtureBase):
 
 @InstanceNormFixture
 def test_instance_norm_op(n: int, c: int, spatial: tuple, dtype: torch.dtype) -> None:
-    test = InstanceNormTest(n, c, spatial, dtype)
+    workload = InstanceNormWorkload(n, c, spatial, dtype)
     op = InstanceNormFwdOp()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 class InstanceNormNonContigFixture(FixtureBase):

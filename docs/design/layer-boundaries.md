@@ -116,7 +116,7 @@ contract. Both consumers use this shared machinery:
 ```text
 Workload: inputs + reference + verification
                     |
-       TestBase.check / bench.Runner.compare
+       check / bench.Runner.compare
                     |
                   verify
                     |

@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops.attention import MLADenseBwdOp, MLAVarlenBwdOp, MLAVarlenFwdOp
 from workloads.attention.mla import (
     MLADenseBwdWorkload,
@@ -17,7 +17,7 @@ pytestmark = pytest.mark.sm90
 
 
 def _check(workload, op) -> None:
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 class MLADenseBwdFixture(FixtureBase):

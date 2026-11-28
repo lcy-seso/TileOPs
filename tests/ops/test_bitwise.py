@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._ops.elementwise import (
     BitwiseAndFwdOp,
     BitwiseNotFwdOp,
@@ -18,23 +18,14 @@ from workloads.elementwise import (
     FullRangeCase,
 )
 
-
-class BitwiseTest(BitwiseCase, TestBase):
-    pass
-
-
-class FullRangeTest(FullRangeCase, TestBase):
-    pass
-
-
 _BITWISE_OPS = [BitwiseAndFwdOp, BitwiseOrFwdOp, BitwiseXorFwdOp]
 
 
 @pytest.mark.smoke
 @pytest.mark.parametrize("op_cls", _BITWISE_OPS)
 def test_bitwise_binary_op(op_cls) -> None:
-    test = BitwiseTest(4_096, op_cls.__name__)
-    test.check(op_cls(), *test.gen_inputs())
+    workload = BitwiseCase(4_096, op_cls.__name__)
+    check(workload, op_cls(), *workload.gen_inputs())
 
 
 # Every op on the bias broadcast; the other broadcast patterns on one op.
@@ -63,7 +54,7 @@ class BitwiseBroadcastFixture(FixtureBase):
 def test_bitwise_broadcast(op_cls, a_shape, b_shape) -> None:
     a = torch.randint(-1000, 1000, a_shape, dtype=torch.int32, device=run_device())
     b = torch.randint(-1000, 1000, b_shape, dtype=torch.int32, device=run_device())
-    TestBase.check(ElementwiseWorkload(op_cls.__name__, (a, b)), op_cls(), a, b)
+    check(ElementwiseWorkload(op_cls.__name__, (a, b)), op_cls(), a, b)
 
 
 class LongInt64BitwiseFixture(FixtureBase):
@@ -87,16 +78,16 @@ class LongInt64BitwiseFixture(FixtureBase):
 
 @LongInt64BitwiseFixture
 def test_bitwise_or_long_int64(a_shape, b_shape) -> None:
-    test = FullRangeTest(((a_shape, torch.int64), (b_shape, torch.int64)), "BitwiseOrFwdOp")
-    test.check(BitwiseOrFwdOp(), *test.gen_inputs())
+    workload = FullRangeCase(((a_shape, torch.int64), (b_shape, torch.int64)), "BitwiseOrFwdOp")
+    check(workload, BitwiseOrFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_bitwise_or_int64_under_tuning() -> None:
-    test = FullRangeTest((((4096,), torch.int64), ((4096,), torch.int64)), "BitwiseOrFwdOp")
+    workload = FullRangeCase((((4096,), torch.int64), ((4096,), torch.int64)), "BitwiseOrFwdOp")
     op = BitwiseOrFwdOp()
     op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 class BoolBitwiseFixture(FixtureBase):
@@ -121,7 +112,7 @@ class BoolBitwiseFixture(FixtureBase):
 def test_bool_bitwise_fast_path(op_cls, a_shape, b_shape) -> None:
     a = torch.randint(0, 2, a_shape, device=run_device()).bool()
     b = torch.randint(0, 2, b_shape, device=run_device()).bool()
-    TestBase.check(ElementwiseWorkload(op_cls.__name__, (a, b)), op_cls(), a, b)
+    check(ElementwiseWorkload(op_cls.__name__, (a, b)), op_cls(), a, b)
 
 
 class BitwiseFixture(FixtureBase):
@@ -140,15 +131,11 @@ class BitwiseFixture(FixtureBase):
     ]
 
 
-class BitwiseNotTest(BitwiseNotWorkload, TestBase):
-    pass
-
-
 @BitwiseFixture
 def test_bitwise_not(n_total: int, dtype: torch.dtype) -> None:
-    test = BitwiseNotTest(n_total, dtype)
+    workload = BitwiseNotWorkload(n_total, dtype)
     op = BitwiseNotFwdOp()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -160,8 +147,8 @@ def test_bitwise_not(n_total: int, dtype: torch.dtype) -> None:
 )
 def test_bitwise_not_long_int64(n_total: int) -> None:
     """int64 input long enough to fill the device several times over."""
-    test = FullRangeTest((((n_total,), torch.int64),), "BitwiseNotFwdOp")
-    test.check(BitwiseNotFwdOp(), *test.gen_inputs())
+    workload = FullRangeCase((((n_total,), torch.int64),), "BitwiseNotFwdOp")
+    check(workload, BitwiseNotFwdOp(), *workload.gen_inputs())
 
 
 # Float dtypes, outside the binary bitwise ops' manifest

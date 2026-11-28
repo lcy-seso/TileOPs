@@ -3,16 +3,12 @@
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._ops.norm.fused_add_rms_norm_per_token_quant import FusedAddRMSNormPerTokenQuantFwdOp
 from workloads.norm import FusedAddRMSNormPerTokenQuantWorkload
 from workloads.numerics import compare_outputs
 
 FP8, INT8 = torch.float8_e4m3fn, torch.int8
-
-
-class FusedAddRMSNormPerTokenQuantTest(FusedAddRMSNormPerTokenQuantWorkload, TestBase):
-    pass
 
 
 class FusedAddRMSNormPerTokenQuantFixture(FixtureBase):
@@ -66,9 +62,9 @@ class FusedAddRMSNormPerTokenQuantFixture(FixtureBase):
 
 @FusedAddRMSNormPerTokenQuantFixture
 def test_fused_add_rms_norm_per_token_quant(shape, dtype, quant_dtype, scale_ub) -> None:
-    test = FusedAddRMSNormPerTokenQuantTest(shape, dtype, quant_dtype, scale_ub=scale_ub)
+    workload = FusedAddRMSNormPerTokenQuantWorkload(shape, dtype, quant_dtype, scale_ub=scale_ub)
     op = FusedAddRMSNormPerTokenQuantFwdOp(quant_dtype=quant_dtype, scale_ub=scale_ub)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke

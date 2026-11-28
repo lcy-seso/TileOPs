@@ -4,24 +4,19 @@ import pytest
 import torch
 
 from tests.compile_contract import assert_op_owns_graph_nodes, register_compile_contract
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops.attention import MLAKVCacheWriteFwdOp
 from workloads.attention.mla_cache_write import (
     MLAKVCacheWriteWorkload,
     mla_cache_write_result,
 )
 
-
-class MLAKVCacheWriteTest(MLAKVCacheWriteWorkload, TestBase):
-    """The workload as a test case: the reference and its policy come from the workload."""
-
-
 BF16, FP16, FP32, FP8 = torch.bfloat16, torch.float16, torch.float32, torch.float8_e4m3fn
 
 
 def _check(workload, op):
     inputs = workload.gen_inputs()
-    TestBase.check(workload, op, *inputs, runs=lambda *args: mla_cache_write_result(op, *args))
+    check(workload, op, *inputs, runs=lambda *args: mla_cache_write_result(op, *args))
 
 
 @pytest.mark.parametrize(
@@ -149,7 +144,7 @@ def test_mla_kv_cache_write_copies_the_named_rows(
     tokens, latent_dim, rope_dim, page_size, num_pages, dtype, cache_dtype, slots
 ):
     """Every row a slot names holds kv_c then k_pe; every other row is untouched."""
-    workload = MLAKVCacheWriteTest(
+    workload = MLAKVCacheWriteWorkload(
         tokens, latent_dim, rope_dim, page_size, num_pages, dtype, cache_dtype, slots=slots
     )
     _check(workload, MLAKVCacheWriteFwdOp())
@@ -314,7 +309,7 @@ def test_mla_kv_cache_write_rotates_k_pe(
     tokens, latent_dim, rope_dim, layout, dtype, cache_dtype, cos_sin_dtype, slots, tune
 ):
     """The k_pe half of every named row holds k_pe rotated at the token's position."""
-    workload = MLAKVCacheWriteTest(
+    workload = MLAKVCacheWriteWorkload(
         tokens,
         latent_dim,
         rope_dim,
@@ -344,7 +339,7 @@ def test_mla_kv_cache_write_saturates_fp8_overflow(fuse_rope):
     With RoPE, position 0 rotates by angle 0, so the rotated columns carry the same values
     through the rotation's own store.
     """
-    workload = MLAKVCacheWriteTest(
+    workload = MLAKVCacheWriteWorkload(
         1,
         16,
         16,
@@ -387,7 +382,7 @@ def test_mla_kv_cache_write_saturates_fp8_overflow(fuse_rope):
     k_pe.copy_(-values.reshape_as(k_pe))
     scale.fill_(1)
     op = MLAKVCacheWriteFwdOp(fuse_rope=fuse_rope, rope_layout="interleaved")
-    TestBase.check(workload, op, *inputs, runs=lambda *args: mla_cache_write_result(op, *args))
+    check(workload, op, *inputs, runs=lambda *args: mla_cache_write_result(op, *args))
 
 
 @pytest.mark.smoke
@@ -398,7 +393,7 @@ def test_mla_kv_cache_write_divides_by_the_scale():
     by the float32 reciprocal of the scale. Position 0 rotates by angle 0, so the
     rotated columns carry the same values.
     """
-    workload = MLAKVCacheWriteTest(
+    workload = MLAKVCacheWriteWorkload(
         1,
         16,
         16,
@@ -424,13 +419,13 @@ def test_mla_kv_cache_write_divides_by_the_scale():
     k_pe.copy_(torch.cat([values, -values]).reshape_as(k_pe))
     scale.fill_(0.9)
     op = MLAKVCacheWriteFwdOp(fuse_rope=True, rope_layout="interleaved")
-    TestBase.check(workload, op, *inputs, runs=lambda *args: mla_cache_write_result(op, *args))
+    check(workload, op, *inputs, runs=lambda *args: mla_cache_write_result(op, *args))
 
 
 @pytest.mark.smoke
 def test_mla_kv_cache_write_skips_every_token():
     """All-negative slots leave a sentinel-filled cache unchanged."""
-    workload = MLAKVCacheWriteTest(3, 64, 16, 7, 4, BF16, slots=[-1, -1, -1])
+    workload = MLAKVCacheWriteWorkload(3, 64, 16, 7, 4, BF16, slots=[-1, -1, -1])
     kv_c, k_pe, kv_cache, slots, scale, positions, cos_sin = workload.gen_inputs()
     kv_cache.fill_(3.0)
     before = kv_cache.clone()
@@ -442,7 +437,7 @@ def test_mla_kv_cache_write_skips_every_token():
 @pytest.mark.smoke
 def test_mla_kv_cache_write_of_no_tokens_writes_nothing():
     """A call with no token writes nothing; the cache it is handed is non-empty."""
-    workload = MLAKVCacheWriteTest(0, 64, 16, 16, 2, BF16)
+    workload = MLAKVCacheWriteWorkload(0, 64, 16, 16, 2, BF16)
     kv_c, k_pe, kv_cache, slots, scale, positions, cos_sin = workload.gen_inputs()
     before = kv_cache.clone()
     op = MLAKVCacheWriteFwdOp()
@@ -453,7 +448,9 @@ def test_mla_kv_cache_write_of_no_tokens_writes_nothing():
 @pytest.mark.smoke
 def test_mla_kv_cache_write_leaves_k_pe_unrotated():
     """Rotating into the cache leaves the caller's k_pe as it was."""
-    workload = MLAKVCacheWriteTest(4, 64, 16, 7, 3, BF16, BF16, True, "neox", BF16, max_position=37)
+    workload = MLAKVCacheWriteWorkload(
+        4, 64, 16, 7, 3, BF16, BF16, True, "neox", BF16, max_position=37
+    )
     inputs = workload.gen_inputs()
     k_pe = inputs[1].clone()
     MLAKVCacheWriteFwdOp(fuse_rope=True)(*inputs)
@@ -473,7 +470,7 @@ def test_mla_kv_cache_write_leaves_k_pe_unrotated():
 def test_mla_kv_cache_write_refuses_an_invalid_tensor_contract(invalid):
     """Unsupported dtypes, a scale that does not match the cache, and missing rope inputs."""
     cache_dtype = FP8 if invalid == "scale-missing" else BF16
-    workload = MLAKVCacheWriteTest(2, 64, 16, 16, 2, BF16, cache_dtype)
+    workload = MLAKVCacheWriteWorkload(2, 64, 16, 16, 2, BF16, cache_dtype)
     inputs = list(workload.gen_inputs())
     op = MLAKVCacheWriteFwdOp()
     if invalid == "scale-missing":
@@ -494,7 +491,7 @@ def test_mla_kv_cache_write_refuses_an_invalid_tensor_contract(invalid):
 @pytest.mark.usefixtures("isolated_dynamo")
 def test_mla_kv_cache_write_compiles_cold_to_its_operator():
     """A cold fullgraph compile owns the graph and writes the same rows as eager."""
-    workload = MLAKVCacheWriteTest(
+    workload = MLAKVCacheWriteWorkload(
         5,
         64,
         16,

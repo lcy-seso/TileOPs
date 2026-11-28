@@ -6,7 +6,7 @@ from typing import Any
 
 import torch
 
-from tests.workload_test_base import TestBase, _by_signature
+from tests.workload_test_base import _by_signature, check
 
 QUALIFIED_OPS = frozenset(
     {
@@ -126,23 +126,23 @@ class CapturedGraph:
 
 
 def check_replay(
-    test: Any,
+    workload: Any,
     op: Callable[..., Any],
     fresh: Sequence[Any] | None = None,
     held: Collection[int] = (),
     result: Callable[..., Any] | None = None,
 ) -> None:
-    """Capture *op* on a draw of *test*'s inputs, renew them from *fresh*, another draw unless
-    given, replay with the *held* positions exempt, and check the replay against *test*'s
+    """Capture *op* on a draw of *workload*'s inputs, renew them from *fresh*, another draw unless
+    given, replay with the *held* positions exempt, and check the replay against *workload*'s
     reference on *fresh*. *result*, given the replay and the captured inputs, forms what an op
     that writes its inputs is compared on."""
-    inputs = test.gen_inputs()
+    inputs = workload.gen_inputs()
     graph = CapturedGraph((op, inputs))
-    fresh = test.gen_inputs() if fresh is None else fresh
+    fresh = workload.gen_inputs() if fresh is None else fresh
     graph.renew(fresh)
     graph.replay(held=[inputs[position] for position in held])
     output = graph.outputs[0] if result is None else result(lambda *_: graph.outputs[0], *inputs)
-    TestBase.check(test, op, *fresh, runs=lambda *args, **kwargs: output)
+    check(workload, op, *fresh, runs=lambda *args, **kwargs: output)
 
 
 def _copy(x: Any, storages: dict) -> Any:

@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._ops.mamba.mamba2_fwd import Mamba2FwdOp
 from tileops._ops.mamba.ssd_chunk_coupling import SSDChunkCouplingFwdOp
 from tileops._ops.mamba.ssd_chunk_cumsum import SSDChunkCumsumFwdOp
@@ -322,15 +322,11 @@ def test_ssd_chunk_coupling_fwd_noncontiguous():
     compare_outputs(out, ref, coupling_verification())
 
 
-class SSDChunkCumsumFwdTest(SSDChunkCumsumFwdWorkload, TestBase):
-    pass
-
-
 @SSDChunkCumsumFwdFixture
 def test_ssd_chunk_cumsum_fwd(
     batch, num_chunks, chunk_len, n_heads, has_dt_bias, dt_softplus, dtype
 ):
-    test = SSDChunkCumsumFwdTest(
+    workload = SSDChunkCumsumFwdWorkload(
         batch,
         num_chunks,
         chunk_len,
@@ -344,7 +340,7 @@ def test_ssd_chunk_cumsum_fwd(
         dt_softplus=dt_softplus,
         out_dtype=dtype,
     )
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -356,40 +352,32 @@ def test_ssd_chunk_cumsum_fwd_padded_head_tile():
     dt = torch.rand(batch, seq_len, n_heads, dtype=torch.float32, device=run_device())
     A = -torch.rand(n_heads, dtype=torch.float32, device=run_device())
 
-    test = SSDChunkCumsumFwdTest(batch, num_chunks, chunk_len, n_heads)
-    test.check(op, dt, A, None)
-
-
-class SSDChunkScanFwdTest(SSDChunkScanFwdWorkload, TestBase):
-    pass
+    workload = SSDChunkCumsumFwdWorkload(batch, num_chunks, chunk_len, n_heads)
+    check(workload, op, dt, A, None)
 
 
 @SSDChunkScanFwdFixture
 def test_ssd_chunk_scan_fwd(
     batch, num_chunks, chunk_len, n_heads, d_head, d_state, n_groups, dtype
 ):
-    test = SSDChunkScanFwdTest(
+    workload = SSDChunkScanFwdWorkload(
         batch, num_chunks, chunk_len, n_heads, d_head, d_state, n_groups, dtype
     )
-    test.check(SSDChunkScanFwdOp(), *test.gen_inputs())
-
-
-class SSDChunkStateFwdTest(SSDChunkStateFwdWorkload, TestBase):
-    pass
+    check(workload, SSDChunkScanFwdOp(), *workload.gen_inputs())
 
 
 @SSDChunkStateFwdFixture
 def test_ssd_chunk_state_fwd(
     batch, num_chunks, chunk_len, n_heads, d_head, d_state, n_groups, dtype, tune, has_seq_idx
 ):
-    test = SSDChunkStateFwdTest(
+    workload = SSDChunkStateFwdWorkload(
         batch, num_chunks, chunk_len, n_heads, d_head, d_state, n_groups, dtype, has_seq_idx
     )
     op = SSDChunkStateFwdOp()
     if tune:
         op.request_tune()
-    inputs = test.gen_inputs()
-    test.check(op, *inputs)
+    inputs = workload.gen_inputs()
+    check(workload, op, *inputs)
 
 
 @pytest.mark.smoke
@@ -435,41 +423,33 @@ def test_ssd_chunk_state_fwd_seq_idx_semantics():
 def test_ssd_chunk_state_fp16_tma_masks_packed_sequences():
     from tileops.backend import BUILTIN
 
-    test = SSDChunkStateFwdTest(1, 16, 256, 48, 64, 128, 1, torch.float16, True)
-    x, bmat, dt, da, seq_idx = test.gen_inputs()
+    workload = SSDChunkStateFwdWorkload(1, 16, 256, 48, 64, 128, 1, torch.float16, True)
+    x, bmat, dt, da, seq_idx = workload.gen_inputs()
     seq_idx[:, :256] = -1
     seq_idx[:, 256:416] = 0
     seq_idx[:, 416:] = 1
     op = SSDChunkStateFwdOp(target=BUILTIN)
     inputs = (x, bmat, dt, da, seq_idx)
     out = op(*inputs)
-    compare_outputs(out, test.ref_program(*inputs), test.verification(*inputs))
+    compare_outputs(out, workload.ref_program(*inputs), workload.verification(*inputs))
     (kernel,) = op.iter_kernels()
     assert kernel._uses_tma_panels()
     assert torch.count_nonzero(out[:, 0]) == 0
 
 
-class SSDStatePassingFwdTest(SSDStatePassingFwdWorkload, TestBase):
-    pass
-
-
 @SSDStatePassingFwdFixture
 def test_ssd_state_passing_fwd(batch, num_chunks, n_heads, d_state, dtype):
-    test = SSDStatePassingFwdTest(batch, num_chunks, n_heads, d_state, dtype)
-    test.check(SSDStatePassingFwdOp(), *test.gen_inputs())
-
-
-class SSDDecodeTest(SSDDecodeWorkload, TestBase):
-    pass
+    workload = SSDStatePassingFwdWorkload(batch, num_chunks, n_heads, d_state, dtype)
+    check(workload, SSDStatePassingFwdOp(), *workload.gen_inputs())
 
 
 @SSDDecodeFixture
 def test_ssd_decode(batch, n_heads, d_head, d_state, n_groups, dtype, tune):
-    test = SSDDecodeTest(batch, n_heads, d_head, d_state, n_groups, dtype)
+    workload = SSDDecodeWorkload(batch, n_heads, d_head, d_state, n_groups, dtype)
     op = SSDRecurrentFwdOp()
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs(), runs=lambda *args: ssd_decode_result(op, *args))
+    check(workload, op, *workload.gen_inputs(), runs=lambda *args: ssd_decode_result(op, *args))
 
 
 @pytest.mark.parametrize(
@@ -505,33 +485,29 @@ def test_mamba2_fwd_e2e(batch, seqlen, n_heads, d_head, d_state, n_groups, chunk
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 def test_ssd_state_passing_fwd_vectorized_short_scan(dtype):
     """A short scan over a flattened 8192-wide state splits each thread's state in two."""
-    test = SSDStatePassingFwdTest(2, 4, 8, 8192, dtype)
-    test.check(SSDStatePassingFwdOp(), *test.gen_inputs())
+    workload = SSDStatePassingFwdWorkload(2, 4, 8, 8192, dtype)
+    check(workload, SSDStatePassingFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
 def test_ssd_state_passing_fwd_prefetched_scan(dtype):
     """A wide state over 16 chunks: four elements a thread, eight chunks loaded ahead."""
-    test = SSDStatePassingFwdTest(1, 16, 4, 8192, dtype)
-    test.check(SSDStatePassingFwdOp(), *test.gen_inputs())
+    workload = SSDStatePassingFwdWorkload(1, 16, 4, 8192, dtype)
+    check(workload, SSDStatePassingFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 def test_ssd_scan_retains_a_small_coefficient_on_a_large_value() -> None:
-    test = SSDChunkScanFwdTest(1, 1, 64, 4, 64, 32, 1, torch.bfloat16)
-    x, cb, decay, c, state, dt = test.gen_inputs()
+    workload = SSDChunkScanFwdWorkload(1, 1, 64, 4, 64, 32, 1, torch.bfloat16)
+    x, cb, decay, c, state, dt = workload.gen_inputs()
     x.zero_()
     x[:, 0] = 1e8
     cb.zero_()
     cb[..., -1, 0] = 1
     decay.zero_()
     decay[..., 32:] = -20
-    test.check(SSDChunkScanFwdOp(), x, cb, decay, c.zero_(), state.zero_(), dt.fill_(1))
-
-
-class SSDStatePassingUnitTest(SSDStatePassingUnitWorkload, TestBase):
-    pass
+    check(workload, SSDChunkScanFwdOp(), x, cb, decay, c.zero_(), state.zero_(), dt.fill_(1))
 
 
 @pytest.mark.parametrize(
@@ -566,8 +542,8 @@ class SSDStatePassingUnitTest(SSDStatePassingUnitWorkload, TestBase):
 )
 def test_ssd_state_passing_fwd_long_and_reset_scans(chunks, width, dtype, initial, period, tune):
     """Long scans and reset tails preserve previous and final states through the op."""
-    test = SSDStatePassingUnitTest(1, chunks, 1, width, dtype, initial, reset_period=period)
+    workload = SSDStatePassingUnitWorkload(1, chunks, 1, width, dtype, initial, reset_period=period)
     op = SSDStatePassingFwdOp()
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())

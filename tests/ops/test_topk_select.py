@@ -2,16 +2,12 @@ import pytest
 import torch
 
 from tests.cuda_graph_contract import CapturedGraph
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._utils import STR_TO_DTYPE
 from tileops.attention import TopKSelectFwdOp
 from workloads.attention.topk_select import TopKSelectWorkload
 from workloads.device import run_device
 from workloads.numerics import compare_outputs
-
-
-class TopKSelectTest(TopKSelectWorkload, TestBase):
-    pass
 
 
 class TopKSelectFixture(FixtureBase):
@@ -68,13 +64,13 @@ def test_topk_select_op(
 ) -> None:
     in_dtype = STR_TO_DTYPE[in_dtype_str]
     out_dtype = STR_TO_DTYPE[out_dtype_str]
-    test = TopKSelectTest(batch, seq_len, seq_len_kv, kv_group, topk, in_dtype, out_dtype)
+    workload = TopKSelectWorkload(batch, seq_len, seq_len_kv, kv_group, topk, in_dtype, out_dtype)
     op = TopKSelectFwdOp(top_k=topk)
     if tune:
         op.request_tune()
-    inputs = test.gen_inputs()
+    inputs = workload.gen_inputs()
 
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.parametrize("fill_value", [None, -1], ids=["fill-default", "fill-minus-one"])
@@ -263,13 +259,13 @@ def test_topk_select_graph_replay(seq_len_kv: int) -> None:
     """DeepSeek-V4-Flash's indexer top-k of a decode token's ratio-4 entries at max_seq_len 4096
     and 4128, replayed at a window end below top_k, which fills the rest with -1, and above
     it. The replays hold the window start, 0 in every decode step."""
-    test = TopKSelectTest(1, 1, seq_len_kv, 1, 512, torch.float32, torch.int32, -1)
-    op = TopKSelectFwdOp(test.topk, fill_value=test.fill_value)
-    inputs = test.gen_inputs()
+    workload = TopKSelectWorkload(1, 1, seq_len_kv, 1, 512, torch.float32, torch.int32, -1)
+    op = TopKSelectFwdOp(workload.topk, fill_value=workload.fill_value)
+    inputs = workload.gen_inputs()
     graph = CapturedGraph((op, inputs))
-    for end in (test.topk // 2, seq_len_kv * 3 // 4):
-        fresh = test.gen_inputs()
+    for end in (workload.topk // 2, seq_len_kv * 3 // 4):
+        fresh = workload.gen_inputs()
         fresh[2].fill_(end)
         graph.renew(fresh)
         graph.replay(held=[inputs[1]])
-        test.check(op, *fresh, runs=lambda *args, **kwargs: graph.outputs[0])
+        check(workload, op, *fresh, runs=lambda *args, **kwargs: graph.outputs[0])

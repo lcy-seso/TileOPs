@@ -4,17 +4,13 @@ the zero padding must not reach the Welford statistics."""
 import pytest
 import torch
 
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops._ops.reduction.reduce import StdFwdOp, VarFwdOp, VarMeanFwdOp
 from workloads.device import run_device
 from workloads.numerics import compare_outputs
 from workloads.reduction import WelfordNonAlignedCase, reduction_reference, reduction_verification
 
 _OPS = {"var": VarFwdOp, "std": StdFwdOp, "var_mean": VarMeanFwdOp}
-
-
-class WelfordNonAlignedTest(WelfordNonAlignedCase, TestBase):
-    pass
 
 
 def _row_cases() -> list:
@@ -35,8 +31,8 @@ def _row_cases() -> list:
 
 @pytest.mark.parametrize("op_kind, m, n, dtype", _row_cases())
 def test_welford_non_aligned_rows(op_kind: str, m: int, n: int, dtype: torch.dtype) -> None:
-    test = WelfordNonAlignedTest((m, n), dtype, op_kind, correction=1)
-    test.check(_OPS[op_kind](dim=-1), *test.gen_inputs())
+    workload = WelfordNonAlignedCase((m, n), dtype, op_kind, correction=1)
+    check(workload, _OPS[op_kind](dim=-1), *workload.gen_inputs())
 
 
 def _nd_cases() -> list:

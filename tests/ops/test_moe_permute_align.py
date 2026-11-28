@@ -12,7 +12,7 @@ import re
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._ops._signature_codegen import CheckError
 from tileops._ops.moe import MoEPermuteAlignFwdOp
 from workloads.device import run_device
@@ -72,11 +72,11 @@ def test_permute_align_op(total_tokens: int, top_k: int, num_experts: int, block
         num_experts=num_experts,
         block_size=block_size,
     )
-    test = MoEPermuteAlignWorkload(call)
+    workload = MoEPermuteAlignWorkload(call)
     op = MoEPermuteAlignFwdOp(num_experts, block_size)
-    inputs = test.gen_inputs()
+    inputs = workload.gen_inputs()
 
-    TestBase.check(test, op, *inputs)
+    check(workload, op, *inputs)
 
 
 @pytest.mark.in_tree_kernels
@@ -100,7 +100,7 @@ def test_sparse_routes_across_expert_blocks(num_experts) -> None:
         manifest_call("MoEPermuteAlignFwdOp", T=129, K=1, num_experts=num_experts, block_size=64)
     )
     op = MoEPermuteAlignFwdOp(num_experts, 64, target=BUILTIN)
-    TestBase.check(workload, op, ids.view(-1, 1))
+    check(workload, op, ids.view(-1, 1))
     (kernel,) = op.iter_kernels()
     with building_on(ids.device):
         assert kernel._fused_fn is _make_sparse_routes_kernel(129, num_experts)
@@ -129,7 +129,7 @@ def test_permute_align_skewed_distribution(
             block_size=block_size,
         )
     )
-    TestBase.check(workload, op, topk_ids)
+    check(workload, op, topk_ids)
 
 
 @pytest.mark.parametrize(

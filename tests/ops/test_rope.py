@@ -11,7 +11,7 @@ import torch
 
 from tests.cuda_graph_contract import CapturedGraph, check_replay
 from tests.misaligned import misaligned
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops.rope import RoPECosSinFwdOp
 from workloads.device import run_device
 from workloads.numerics import compare_outputs
@@ -769,14 +769,6 @@ def test_longrope_matches_phi3_at_positions_past_0(long_context, monkeypatch) ->
 # ---------------------------------------------------------------- caller-given cos and sin
 
 
-class RoPECosSinTest(RoPECosSinCall, TestBase):
-    pass
-
-
-class RoPECosSinViewTest(RoPECosSinViewCall, TestBase):
-    pass
-
-
 _F32_TABLES = {"C": "float32", "Cs": "float32"}
 
 
@@ -890,16 +882,16 @@ _COS_SIN_CASES = (
 
 @pytest.mark.parametrize("row, dtype_case", _COS_SIN_CASES)
 def test_rope_cos_sin_matches_the_reference(row, dtype_case) -> None:
-    test = RoPECosSinTest(manifest_call("RoPECosSinFwdOp", dtype_case, **row))
-    test.check(RoPECosSinFwdOp(**test.arguments()), *test.gen_inputs())
+    workload = RoPECosSinCall(manifest_call("RoPECosSinFwdOp", dtype_case, **row))
+    check(workload, RoPECosSinFwdOp(**workload.arguments()), *workload.gen_inputs())
 
 
 def _strided_view_call(interleaved, inplace, columns, width):
     """The op and its inputs on a column view of heads *width* columns wide."""
     row = _dense(1, 37, 4, len(range(width)[columns]), 16, interleaved=interleaved, inplace=inplace)
     call = manifest_call("RoPECosSinFwdOp", {"T": "bfloat16", **_F32_TABLES}, **row)
-    test = RoPECosSinViewTest(call, width, columns)
-    return test, RoPECosSinFwdOp(**test.arguments()), test.gen_inputs()
+    workload = RoPECosSinViewCall(call, width, columns)
+    return workload, RoPECosSinFwdOp(**workload.arguments()), workload.gen_inputs()
 
 
 # The trailing columns of NeoX heads are the smoke case; the other pairing and a
@@ -919,8 +911,8 @@ _VIEWS = pytest.mark.parametrize(
 def test_rope_cos_sin_rotates_a_strided_view_in_place(interleaved, columns) -> None:
     """A column view of wider heads rotated in place, as DeepSeek-V4-Flash rotates the
     trailing columns of each head: x is returned, and only the view's columns change."""
-    test, op, inputs = _strided_view_call(interleaved, True, columns, 136)
-    test.check(op, *inputs)
+    workload, op, inputs = _strided_view_call(interleaved, True, columns, 136)
+    check(workload, op, *inputs)
     x, wide = inputs[0], inputs[0]._base
     before = wide.clone()
     assert op(*inputs) is x
@@ -940,8 +932,8 @@ def test_rope_cos_sin_rotates_a_strided_view_in_place(interleaved, columns) -> N
 )
 def test_rope_cos_sin_rotates_a_strided_view_into_a_new_tensor(columns) -> None:
     """A column view of wider heads read out of place: the wider heads are left as they were."""
-    test, op, inputs = _strided_view_call(False, False, columns, 136)
-    test.check(op, *inputs)
+    workload, op, inputs = _strided_view_call(False, False, columns, 136)
+    check(workload, op, *inputs)
     wide = inputs[0]._base
     before = wide.clone()
     op(*inputs)
@@ -963,7 +955,7 @@ def test_rope_cos_sin_graph_replay(heads, width, P) -> None:
     heads, the attention's or the indexer's, at an int32 device offset into the tables of
     max_seq_len 4096 or 4128. The replay rotates at the table's last position, which no draw
     of the offset reaches."""
-    test = RoPECosSinViewTest(
+    workload = RoPECosSinViewCall(
         manifest_call(
             "RoPECosSinFwdOp",
             {"T": "bfloat16", **_F32_TABLES, "O": "int32"},
@@ -974,9 +966,9 @@ def test_rope_cos_sin_graph_replay(heads, width, P) -> None:
         width,
         slice(-64, None),
     )
-    inputs = test.gen_inputs()
+    inputs = workload.gen_inputs()
     inputs[4].fill_(inputs[1].shape[0] - 1)
-    check_replay(test, RoPECosSinFwdOp(**test.arguments()), inputs)
+    check_replay(workload, RoPECosSinFwdOp(**workload.arguments()), inputs)
 
 
 _OFFSETS = _dense(2, 19, 3, 128, 64, P=32, some=["seqlen_offsets"])
@@ -1008,10 +1000,12 @@ def test_rope_cos_sin_unchecked_row_outside_the_tables_reads_its_nearest_row(
     row, dtypes, offsets
 ) -> None:
     call = manifest_call("RoPECosSinFwdOp", {"T": "float16", **_F32_TABLES, **dtypes}, **row)
-    test = RoPECosSinTest(call)
-    x, cos, sin, cu_seqlens, seqlen_offsets = test.gen_inputs()
+    workload = RoPECosSinCall(call)
+    x, cos, sin, cu_seqlens, seqlen_offsets = workload.gen_inputs()
     seqlen_offsets.copy_(torch.tensor(offsets))
-    test.check(RoPECosSinFwdOp(**test.arguments()), x, cos, sin, cu_seqlens, seqlen_offsets)
+    check(
+        workload, RoPECosSinFwdOp(**workload.arguments()), x, cos, sin, cu_seqlens, seqlen_offsets
+    )
 
 
 @pytest.mark.parametrize(
@@ -1031,16 +1025,16 @@ def test_rope_cos_sin_int64_offset_at_its_maximum_reads_the_last_row(row) -> Non
     on the int64 extremes reads the rows the reference reads on P - 1 and -S, which reach the
     same rows without the wrapping sum the reference makes on the extremes."""
     call = manifest_call("RoPECosSinFwdOp", {"T": "float16", **_F32_TABLES, "O": "int64"}, **row)
-    test = RoPECosSinTest(call)
-    x, cos, sin, cu_seqlens, _ = test.gen_inputs()
-    op = RoPECosSinFwdOp(**test.arguments())
+    workload = RoPECosSinCall(call)
+    x, cos, sin, cu_seqlens, _ = workload.gen_inputs()
+    op = RoPECosSinFwdOp(**workload.arguments())
     extreme = torch.tensor([2**63 - 1, -(2**63)], device=x.device)
     nearest = torch.tensor([cos.shape[0] - 1, -x.shape[1]], device=x.device)
 
     def on_extremes(x, cos, sin, cu_seqlens=None, seqlen_offsets=0):
         return op(x, cos, sin, cu_seqlens, extreme)
 
-    test.check(op, x, cos, sin, cu_seqlens, nearest, runs=on_extremes)
+    check(workload, op, x, cos, sin, cu_seqlens, nearest, runs=on_extremes)
 
 
 @pytest.mark.in_tree_kernels
@@ -1056,9 +1050,9 @@ def test_rope_cos_sin_kernel_int_offset_at_its_extremes_reads_the_end_rows(extre
     reaches, so an int64 extreme reads the rows P - 1 or -S read, without a wrapping sum."""
     row = _dense(1, 37, 4, 72, 36)
     call = manifest_call("RoPECosSinFwdOp", {"T": "float16", **_F32_TABLES}, **row)
-    test = RoPECosSinTest(call)
-    x, cos, sin, cu_seqlens, seqlen_offsets = test.gen_inputs()
-    op = RoPECosSinFwdOp(**test.arguments())
+    workload = RoPECosSinCall(call)
+    x, cos, sin, cu_seqlens, seqlen_offsets = workload.gen_inputs()
+    op = RoPECosSinFwdOp(**workload.arguments())
     op(x, cos, sin, cu_seqlens, seqlen_offsets)
     (kernel,) = op.iter_kernels()
     nearest = cos.shape[0] - 1 if extreme > 0 else -x.shape[1]
@@ -1073,9 +1067,9 @@ def test_rope_cos_sin_in_place_leaves_the_memory_past_x_untouched() -> None:
     nothing, here the part of the buffer past x."""
     row = _dense(1, 37, 4, 72, 36, inplace=True)
     call = manifest_call("RoPECosSinFwdOp", {"T": "bfloat16", **_F32_TABLES}, **row)
-    test = RoPECosSinTest(call)
-    x, cos, sin, cu_seqlens, seqlen_offsets = test.gen_inputs()
-    op = RoPECosSinFwdOp(**test.arguments())
+    workload = RoPECosSinCall(call)
+    x, cos, sin, cu_seqlens, seqlen_offsets = workload.gen_inputs()
+    op = RoPECosSinFwdOp(**workload.arguments())
     buffer = torch.randn(x.numel() + 128 * 4 * 72, dtype=x.dtype, device=x.device)
     head = buffer[: x.numel()].view(x.shape)
     rest = buffer[x.numel() :].clone()
@@ -1098,9 +1092,9 @@ def test_rope_cos_sin_rotates_sequences_far_apart(apart) -> None:
     call = manifest_call(
         "RoPECosSinFwdOp", {"T": "float16", "C": "float16", "Cs": "float16"}, **row
     )
-    test = RoPECosSinTest(call)
-    x, cos, sin, cu_seqlens, seqlen_offsets = test.gen_inputs()
+    workload = RoPECosSinCall(call)
+    x, cos, sin, cu_seqlens, seqlen_offsets = workload.gen_inputs()
     storage = torch.zeros(apart + 19 * 3 * 256, dtype=x.dtype, device=x.device)
     view = storage.as_strided(x.shape, (apart, 3 * 256, 256, 2))
     view.copy_(x)
-    test.check(RoPECosSinFwdOp(), view, cos, sin, cu_seqlens, seqlen_offsets)
+    check(workload, RoPECosSinFwdOp(), view, cos, sin, cu_seqlens, seqlen_offsets)

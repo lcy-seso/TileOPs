@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops._kernels.kernel_base import Kernel
 from tileops._kernels.linear_attention import DeltaNetChunkCall
 from tileops.backend import BUILTIN, OpNotAvailableError, TensorSpec
@@ -32,10 +32,6 @@ PREFILL_ARCHITECTURES = pytest.mark.parametrize(
     "_architecture",
     [pytest.param(89, marks=pytest.mark.sm89), pytest.param(90, marks=pytest.mark.sm90)],
 )
-
-
-class DeltaNetChunkwiseTest(DeltaNetChunkwiseWorkload, TestBase):
-    pass
 
 
 class DeltaNetChunkFwdFixture(FixtureBase):
@@ -152,11 +148,11 @@ def test_deltanet_fwd(
     tune: bool,
 ) -> None:
     torch.manual_seed(42)
-    test = DeltaNetChunkwiseTest(batch, heads, seq_len, dim_k, dim_v, chunk_size, dtype)
+    workload = DeltaNetChunkwiseWorkload(batch, heads, seq_len, dim_k, dim_v, chunk_size, dtype)
     op = DeltaNetChunkFwdOp(chunk_size=chunk_size)
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -164,7 +160,7 @@ def test_deltanet_fwd(
 def test_deltanet_chunk_accepts_strided_inputs() -> None:
     """Chunk kernels accept transpose-backed inputs and saved forward tensors."""
     torch.manual_seed(42)
-    workload = DeltaNetChunkwiseTest(2, 2, 64, 64, 64, 32, torch.float16)
+    workload = DeltaNetChunkwiseWorkload(2, 2, 64, 64, 64, 32, torch.float16)
     inputs = workload.gen_inputs()
     fwd = DeltaNetChunkFwdOp(chunk_size=32, target=BUILTIN)
     bwd = DeltaNetChunkBwdOp(chunk_size=32, target=BUILTIN)
@@ -455,10 +451,6 @@ def test_deltanet_chunk_refuses_extents_no_matmul_tiles(
         op_cls().key_for(name, call)
 
 
-class DeltaNetFwdTest(DeltaNetFwdWorkload, TestBase):
-    pass
-
-
 @pytest.mark.smoke
 @pytest.mark.usefixtures("isolated_registry")
 def test_deltanet_fwd_reaches_target_with_optional_inputs() -> None:
@@ -524,11 +516,11 @@ def test_deltanet_fwd_reaches_target_with_optional_inputs() -> None:
 @PREFILL_ARCHITECTURES
 def test_deltanet_dense_prefill_matches_fla(_architecture: int, dtype: torch.dtype) -> None:
     torch.manual_seed(2163)
-    test = DeltaNetFwdTest(2, 128, 4, 64, dtype)
-    inputs = test.gen_inputs()
+    workload = DeltaNetFwdWorkload(2, 128, 4, 64, dtype)
+    inputs = workload.gen_inputs()
     op = DeltaNetFwdOp()
-    test.check(op, *inputs)
-    test.check(op, *inputs[:4])
+    check(workload, op, *inputs)
+    check(workload, op, *inputs[:4])
 
 
 @pytest.mark.smoke
@@ -536,9 +528,9 @@ def test_deltanet_dense_prefill_matches_fla(_architecture: int, dtype: torch.dty
 def test_deltanet_dense_prefill_normalizes_q_and_k(_architecture: int) -> None:
     """``use_qk_l2norm_in_kernel`` takes Q and K unnormalized and matches FLA."""
     torch.manual_seed(2163)
-    test = DeltaNetFwdTest(2, 128, 4, 64, torch.bfloat16, l2norm=True)
+    workload = DeltaNetFwdWorkload(2, 128, 4, 64, torch.bfloat16, l2norm=True)
     op = DeltaNetFwdOp(use_qk_l2norm_in_kernel=True)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -546,16 +538,16 @@ def test_deltanet_dense_prefill_normalizes_q_and_k(_architecture: int) -> None:
 def test_deltanet_prefill_packs_ragged_sequences(_architecture: int) -> None:
     """Lengths below, across and on a chunk boundary in one packed call."""
     torch.manual_seed(42)
-    test = DeltaNetFwdTest(1, 0, 4, 64, torch.bfloat16, sequence_lengths=(1, 63, 100, 192))
-    test.check(DeltaNetFwdOp(), *test.gen_inputs())
+    workload = DeltaNetFwdWorkload(1, 0, 4, 64, torch.bfloat16, sequence_lengths=(1, 63, 100, 192))
+    check(workload, DeltaNetFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 @PREFILL_ARCHITECTURES
 def test_deltanet_prefill_runs_a_row_that_is_not_a_whole_chunk(_architecture: int) -> None:
     torch.manual_seed(42)
-    test = DeltaNetFwdTest(2, 100, 4, 64, torch.bfloat16)
-    test.check(DeltaNetFwdOp(), *test.gen_inputs())
+    workload = DeltaNetFwdWorkload(2, 100, 4, 64, torch.bfloat16)
+    check(workload, DeltaNetFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -563,10 +555,10 @@ def test_deltanet_prefill_runs_a_row_that_is_not_a_whole_chunk(_architecture: in
 @pytest.mark.sm90
 def test_deltanet_partitioned_prefill_matches_fla() -> None:
     torch.manual_seed(2163)
-    test = DeltaNetFwdTest(2, 512, 4, 64, torch.bfloat16)
-    inputs = list(test.gen_inputs())
+    workload = DeltaNetFwdWorkload(2, 512, 4, 64, torch.bfloat16)
+    inputs = list(workload.gen_inputs())
     # 16 chunks fall to the four-chunk partition floor, so sequences cross partitions.
-    test.check(DeltaNetFwdOp(target=BUILTIN), *inputs)
+    check(workload, DeltaNetFwdOp(target=BUILTIN), *inputs)
 
 
 @pytest.mark.smoke
@@ -576,21 +568,21 @@ def test_deltanet_partitioned_prefill_matches_fla() -> None:
 def test_deltanet_decode_matches_fla(dtype: torch.dtype) -> None:
     """One token continues a caller-owned state, and starts from zero without one."""
     torch.manual_seed(2163)
-    test = DeltaNetFwdTest(2, 1, 4, 128, dtype)
-    inputs = test.gen_inputs()
+    workload = DeltaNetFwdWorkload(2, 1, 4, 128, dtype)
+    inputs = workload.gen_inputs()
     op = DeltaNetFwdOp()
     # The workload keeps the single-step 4e-8 bound.
-    test.check(op, *inputs)
-    test.check(op, *inputs[:4])
+    check(workload, op, *inputs)
+    check(workload, op, *inputs[:4])
 
 
 @pytest.mark.smoke
 @pytest.mark.sm90
 def test_deltanet_wide_partitioned_prefill_matches_fla() -> None:
     torch.manual_seed(2163)
-    test = DeltaNetFwdTest(2, 1024, 4, 128, torch.bfloat16)
+    workload = DeltaNetFwdWorkload(2, 1024, 4, 128, torch.bfloat16)
     # 16 chunks a row over a four-chunk partition: a 128-wide state crosses partitions.
-    test.check(DeltaNetFwdOp(), *test.gen_inputs())
+    check(workload, DeltaNetFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -598,12 +590,8 @@ def test_deltanet_wide_partitioned_prefill_matches_fla() -> None:
 @PREFILL_ARCHITECTURES
 def test_deltanet_wide_prefill_matches_fla(_architecture: int) -> None:
     torch.manual_seed(2163)
-    test = DeltaNetFwdTest(1, 256, 4, 128, torch.bfloat16)
-    test.check(DeltaNetFwdOp(), *test.gen_inputs())
-
-
-class DeltaNetDecodeTest(DeltaNetDecodeWorkload, TestBase):
-    pass
+    workload = DeltaNetFwdWorkload(1, 256, 4, 128, torch.bfloat16)
+    check(workload, DeltaNetFwdOp(), *workload.gen_inputs())
 
 
 class DeltaNetDecodeFixture(FixtureBase):
@@ -628,8 +616,8 @@ def test_deltanet_decode(
     batch: int, heads: int, dim_k: int, dim_v: int, dtype: torch.dtype
 ) -> None:
     torch.manual_seed(42)
-    test = DeltaNetDecodeTest(batch, heads, dim_k, dim_v, dtype)
-    test.check(DeltaNetRecurrentFwdOp(), *test.gen_inputs())
+    workload = DeltaNetDecodeWorkload(batch, heads, dim_k, dim_v, dtype)
+    check(workload, DeltaNetRecurrentFwdOp(), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -640,7 +628,7 @@ def test_deltanet_decode(
 )
 def test_deltanet_decode_accepts_strided_inputs(width: int, dtype: torch.dtype) -> None:
     torch.manual_seed(42)
-    inputs = DeltaNetDecodeTest(2, 2, width, width, dtype).gen_inputs()
+    inputs = DeltaNetDecodeWorkload(2, 2, width, width, dtype).gen_inputs()
     views = tuple(t.transpose(0, 1).contiguous().transpose(0, 1) for t in inputs)
     assert all(not view.is_contiguous() for view in views)
     op = DeltaNetRecurrentFwdOp(target=BUILTIN)
@@ -685,8 +673,8 @@ def test_deltanet_decode_multi_step(
 def test_deltanet_decode_warp_real_128x128_smoke(dtype: torch.dtype) -> None:
     """The SM90 warp decode of a 128 x 128 low-precision state."""
     torch.manual_seed(42)
-    test = DeltaNetDecodeTest(2, 4, 128, 128, dtype)
-    test.check(DeltaNetRecurrentFwdOp(target=BUILTIN), *test.gen_inputs())
+    workload = DeltaNetDecodeWorkload(2, 4, 128, 128, dtype)
+    check(workload, DeltaNetRecurrentFwdOp(target=BUILTIN), *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels

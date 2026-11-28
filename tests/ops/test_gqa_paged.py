@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from tests.cuda_graph_contract import CapturedGraph
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops.attention import GQAPagedFwdOp, PagedKVCacheWriteFwdOp
 from tileops.backend import OpNotAvailableError
 from workloads.attention.gqa.paged import GQAPagedFwdWorkload
@@ -45,7 +45,7 @@ def _decode(
 
 
 def _check(op, workload, inputs) -> None:
-    TestBase.check(workload, op, *inputs)
+    check(workload, op, *inputs)
 
 
 def _kernel(op: GQAPagedFwdOp, inputs: tuple) -> object:
@@ -507,7 +507,7 @@ def test_gqa_paged_rope_replays_positions_from_device_lengths() -> None:
     inputs[5][1] = 2
     workload.q_lens, workload.cache_lens = [2, 2], [33, 63]
     graph.replay()
-    TestBase.check(workload, op, *inputs, runs=lambda *args: output)
+    check(workload, op, *inputs, runs=lambda *args: output)
 
 
 @pytest.mark.smoke
@@ -542,7 +542,7 @@ def test_gqa_paged_rope_prefill_replays_rotated_key_channels() -> None:
         inputs[1][stale] = float("nan")
         inputs[2][stale] = float("nan")
     graph.replay()
-    TestBase.check(workload, op, *inputs, runs=lambda *args: output)
+    check(workload, op, *inputs, runs=lambda *args: output)
 
 
 class GQAPagedDecodeFixture(FixtureBase):
@@ -984,7 +984,7 @@ def test_gqa_paged_warp_specialized_head_groups(
     _, build = GQAPagedFwdWSKernel.entry_for(call)
     pools = k_cache.flatten(0, 1), v_cache.flatten(0, 1)
     output = build()(q, *pools, cache_seqlens, block_table, cu_seqlens_q, *scales, cos, sin, sinks)
-    TestBase.check(workload, op, *inputs, runs=lambda *args: output)
+    check(workload, op, *inputs, runs=lambda *args: output)
 
 
 def _laid_out_queries(q: torch.Tensor, layout: tuple) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1090,7 +1090,7 @@ def test_gqa_paged_reads_projection_columns(
         assert torch.equal(storage, before)
         return out
 
-    TestBase.check(workload, op, q, *rest, runs=run)
+    check(workload, op, q, *rest, runs=run)
 
 
 @pytest.mark.smoke
@@ -1500,7 +1500,7 @@ def test_gqa_paged_graph_replay(batch: int, longest: int, call: dict) -> None:
         slots = torch.arange(length, block_table.numel() * page_size, device=v_cache.device)
         v_cache[block_table[slots // page_size], slots % page_size] = float("nan")
         graph.replay(held=[inputs[5]] if batch == 1 else [])
-        TestBase.check(workload, op, *inputs, runs=lambda *args: graph.outputs[0])
+        check(workload, op, *inputs, runs=lambda *args: graph.outputs[0])
 
 
 @pytest.mark.smoke
@@ -1508,7 +1508,7 @@ def test_gqa_paged_sink_normalization() -> None:
     """A small paged prefill includes one denominator-only logit per query head."""
     workload = GQAPagedFwdWorkload(8, 2, 64, [17], [65], 32, 3, 3, torch.bfloat16, has_sinks=True)
     inputs = workload.gen_inputs()
-    TestBase.check(workload, GQAPagedFwdOp(is_causal=True), *inputs)
+    check(workload, GQAPagedFwdOp(is_causal=True), *inputs)
 
 
 @pytest.mark.smoke
@@ -1571,7 +1571,7 @@ def test_gqa_paged_autotune_supplies_packed_inputs(monkeypatch) -> None:
     workload = GQAPagedFwdWorkload(32, 8, 128, [160, 160], [700, 450], 64, 11, 22, torch.float16)
     op = GQAPagedFwdOp(is_causal=True)
     op.request_tune()
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     entries = [
         entry for interface in op.interfaces for entry in op._entries_built(interface).values()
     ]
@@ -2118,7 +2118,7 @@ def test_gqa_paged_fp8_split_runs(
     for scale in (1.0, -1.0):
         v_cache.copy_((v_cache.float() * scale).to(FP8))
         cuda_graph.replay()
-        TestBase.check(workload, op, *inputs, runs=lambda *args: output)
+        check(workload, op, *inputs, runs=lambda *args: output)
 
 
 @pytest.mark.in_tree_kernels
@@ -2253,7 +2253,7 @@ def test_gqa_paged_write_then_read(cache_dtype: torch.dtype) -> None:
     inputs = case.gen_inputs()
     write_workload, write_inputs = case.append_workload(inputs)
     write_op = PagedKVCacheWriteFwdOp()
-    TestBase.check(
+    check(
         write_workload,
         write_op,
         *write_inputs,

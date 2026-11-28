@@ -12,7 +12,7 @@ from tests.ops.layer_norm_helpers import (
     outlier_rows,
     warp_leads,
 )
-from tests.workload_test_base import FixtureBase, TestBase, op_preferring, smoke_first
+from tests.workload_test_base import FixtureBase, check, op_preferring, smoke_first
 from tileops._kernels.norm import (
     AdaLayerNormHeldKernel,
     AdaLayerNormKernel,
@@ -31,10 +31,6 @@ from workloads.norm import (
     AdaLayerNormZeroOutlierLeadWorkload,
     AdaLayerNormZeroWorkload,
 )
-
-
-class AdaLayerNormTest(AdaLayerNormWorkload, TestBase):
-    pass
 
 
 class AdaLayerNormFixture(FixtureBase):
@@ -60,9 +56,9 @@ class AdaLayerNormFixture(FixtureBase):
 
 @AdaLayerNormFixture
 def test_ada_layer_norm_op(m: int, n: int, dtype: torch.dtype) -> None:
-    test = AdaLayerNormTest(m, n, dtype)
+    workload = AdaLayerNormWorkload(m, n, dtype)
     op = AdaLayerNormFwdOp()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -72,17 +68,9 @@ def test_ada_layer_norm_kernel_handles_natural_unaligned_shape(
     dtype: torch.dtype,
 ) -> None:
     m, n = 16, 1152
-    test = AdaLayerNormTest(m, n, dtype)
-    op = AdaLayerNormFwdOp(eps=test.eps, target=BUILTIN)
-    test.check(op, *test.gen_inputs())
-
-
-class AdaLayerNormFarFromZeroTest(AdaLayerNormFarFromZeroWorkload, TestBase):
-    pass
-
-
-class AdaLayerNormZeroFarFromZeroTest(AdaLayerNormZeroFarFromZeroWorkload, TestBase):
-    pass
+    workload = AdaLayerNormWorkload(m, n, dtype)
+    op = AdaLayerNormFwdOp(eps=workload.eps, target=BUILTIN)
+    check(workload, op, *workload.gen_inputs())
 
 
 def _gated(gated, case):
@@ -143,21 +131,13 @@ _ADA_FAR_CASES = smoke_first(
 @pytest.mark.parametrize("gated, rows, n, kernel, dtype, row", _ADA_FAR_CASES)
 def test_ada_layer_norm_normalizes_rows_far_from_zero(gated, rows, n, kernel, dtype, row) -> None:
     m = outlier_rows(rows)
-    test_cls = AdaLayerNormZeroFarFromZeroTest if gated else AdaLayerNormFarFromZeroTest
-    test = test_cls(m, n, dtype, row=row)
+    workload_cls = AdaLayerNormZeroFarFromZeroWorkload if gated else AdaLayerNormFarFromZeroWorkload
+    workload = workload_cls(m, n, dtype, row=row)
     op = (AdaLayerNormZeroFwdOp if gated else AdaLayerNormFwdOp)()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
     (built,) = op.iter_kernels()
     held = AdaLayerNormZeroHeldKernel if gated else AdaLayerNormHeldKernel
     assert isinstance(built, held) == (kernel == "held")
-
-
-class AdaLayerNormOutlierLeadTest(AdaLayerNormOutlierLeadWorkload, TestBase):
-    pass
-
-
-class AdaLayerNormZeroOutlierLeadTest(AdaLayerNormZeroOutlierLeadWorkload, TestBase):
-    pass
 
 
 def _outlier_case(gated, rows, n, kernel, leads, mark):
@@ -190,12 +170,12 @@ def test_ada_layer_norm_normalizes_rows_with_an_outlier_lead(gated, rows, n, ker
     held = AdaLayerNormZeroHeldKernel if gated else AdaLayerNormHeldKernel
     check_held_launch(held, kernel, m, n, dtype)
     positions = (0,) if leads == "row" else warp_leads(held, m, n, dtype)
-    test_cls = AdaLayerNormZeroOutlierLeadTest if gated else AdaLayerNormOutlierLeadTest
-    test = test_cls(m, n, dtype, leads=positions)
+    workload_cls = AdaLayerNormZeroOutlierLeadWorkload if gated else AdaLayerNormOutlierLeadWorkload
+    workload = workload_cls(m, n, dtype, leads=positions)
     op = (AdaLayerNormZeroFwdOp if gated else AdaLayerNormFwdOp)()
-    inputs = test.gen_inputs()
+    inputs = workload.gen_inputs()
     assert_raw_sums_fail(inputs[0])
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
     (built,) = op.iter_kernels()
     assert isinstance(built, held) == (kernel != "fragment")
 
@@ -224,11 +204,11 @@ def test_ada_layer_norm_fragment_prefetches_rows_with_an_outlier_lead(gated) -> 
 
     op = op_preferring(op_cls, "ada_layer_norm_prefetched", Prefetched)
     n = 3000
-    test_cls = AdaLayerNormZeroOutlierLeadTest if gated else AdaLayerNormOutlierLeadTest
-    test = test_cls(2 * get_sm_count(), n, torch.float32, leads=(0,))
-    inputs = test.gen_inputs()
+    workload_cls = AdaLayerNormZeroOutlierLeadWorkload if gated else AdaLayerNormOutlierLeadWorkload
+    workload = workload_cls(2 * get_sm_count(), n, torch.float32, leads=(0,))
+    inputs = workload.gen_inputs()
     assert_raw_sums_fail(inputs[0])
-    test.check(op, *inputs)
+    check(workload, op, *inputs)
     (built,) = op.iter_kernels()
     assert isinstance(built, Prefetched)
     assert built.use_cp_async
@@ -248,9 +228,9 @@ def test_ada_layer_norm_async_policy_edge_correctness(
     dtype: torch.dtype,
 ) -> None:
     m = 4
-    test = AdaLayerNormTest(m, n, dtype)
-    op = AdaLayerNormFwdOp(eps=test.eps, target=BUILTIN)
-    test.check(op, *test.gen_inputs())
+    workload = AdaLayerNormWorkload(m, n, dtype)
+    op = AdaLayerNormFwdOp(eps=workload.eps, target=BUILTIN)
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -258,13 +238,11 @@ def test_ada_layer_norm_async_policy_edge_correctness(
 def test_ada_layer_norm_3d(zero: bool) -> None:
     """Leading axes fold into rows, the modulation tensors' with them."""
     batch, seq, hidden, dtype = 2, 512, 4096, torch.bfloat16
-    test = (AdaLayerNormZeroTest if zero else AdaLayerNormTest)(batch * seq, hidden, dtype)
-    inputs = (t.view(batch, seq, hidden) for t in test.gen_inputs())
-    test.check(AdaLayerNormZeroFwdOp() if zero else AdaLayerNormFwdOp(), *inputs)
-
-
-class AdaLayerNormZeroTest(AdaLayerNormZeroWorkload, TestBase):
-    pass
+    workload = (AdaLayerNormZeroWorkload if zero else AdaLayerNormWorkload)(
+        batch * seq, hidden, dtype
+    )
+    inputs = (t.view(batch, seq, hidden) for t in workload.gen_inputs())
+    check(workload, AdaLayerNormZeroFwdOp() if zero else AdaLayerNormFwdOp(), *inputs)
 
 
 class AdaLayerNormZeroFixture(FixtureBase):
@@ -290,9 +268,9 @@ class AdaLayerNormZeroFixture(FixtureBase):
 
 @AdaLayerNormZeroFixture
 def test_ada_layer_norm_zero_op(m: int, n: int, dtype: torch.dtype) -> None:
-    test = AdaLayerNormZeroTest(m, n, dtype)
+    workload = AdaLayerNormZeroWorkload(m, n, dtype)
     op = AdaLayerNormZeroFwdOp()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.in_tree_kernels
@@ -302,9 +280,9 @@ def test_ada_layer_norm_zero_kernel_handles_natural_unaligned_shape(
     dtype: torch.dtype,
 ) -> None:
     m, n = 16, 1152
-    test = AdaLayerNormZeroTest(m, n, dtype)
-    op = AdaLayerNormZeroFwdOp(eps=test.eps, target=BUILTIN)
-    test.check(op, *test.gen_inputs())
+    workload = AdaLayerNormZeroWorkload(m, n, dtype)
+    op = AdaLayerNormZeroFwdOp(eps=workload.eps, target=BUILTIN)
+    check(workload, op, *workload.gen_inputs())
 
 
 _TUNE = [pytest.param(False, marks=pytest.mark.smoke), pytest.param(True, marks=pytest.mark.full)]
@@ -312,26 +290,26 @@ _TUNE = [pytest.param(False, marks=pytest.mark.smoke), pytest.param(True, marks=
 
 @pytest.mark.parametrize("tune", _TUNE)
 def test_ada_layer_norm_under_tuning(tune: bool) -> None:
-    test = AdaLayerNormTest(17, 514, torch.float16)
-    op = AdaLayerNormFwdOp(eps=test.eps)
+    workload = AdaLayerNormWorkload(17, 514, torch.float16)
+    op = AdaLayerNormFwdOp(eps=workload.eps)
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize("tune", _TUNE)
 def test_ada_layer_norm_zero_under_tuning(tune: bool) -> None:
-    test = AdaLayerNormZeroTest(17, 514, torch.float16)
-    op = AdaLayerNormZeroFwdOp(eps=test.eps)
+    workload = AdaLayerNormZeroWorkload(17, 514, torch.float16)
+    op = AdaLayerNormZeroFwdOp(eps=workload.eps)
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
 @pytest.mark.parametrize("zero", [False, True], ids=["ada", "ada-zero"])
 def test_ada_layer_norm_reads_inputs_off_the_vector_boundary(zero: bool) -> None:
     """A contiguous input and modulation tensors may start anywhere in their storage."""
-    test = (AdaLayerNormZeroTest if zero else AdaLayerNormTest)(4, 1024, torch.float16)
+    workload = (AdaLayerNormZeroWorkload if zero else AdaLayerNormWorkload)(4, 1024, torch.float16)
     op = AdaLayerNormZeroFwdOp() if zero else AdaLayerNormFwdOp()
-    test.check(op, *(misaligned(t) for t in test.gen_inputs()))
+    check(workload, op, *(misaligned(t) for t in workload.gen_inputs()))

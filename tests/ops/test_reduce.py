@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from tests.misaligned import misaligned
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops._ops.reduction import (
     AmaxFwdOp,
     AminFwdOp,
@@ -29,29 +29,7 @@ from workloads.reduction import (
     reduction_reference,
     reduction_verification,
 )
-
-
-class ReduceTest(ReduceCase, TestBase):
-    pass
-
-
-class ProdTest(ProdWorkload, TestBase):
-    """Parameterized test helper for prod op (uses small-range inputs)."""
-
-    def __init__(self, m: int, n: int, dtype: torch.dtype):
-        super().__init__((m, n), dtype)
-
-
-class WelfordTest(WelfordCase, TestBase):
-    pass
-
-
-class ExtremaNanTest(ExtremaNanCase, TestBase):
-    pass
-
-
-class VarianceConstantTest(VarianceConstantCase, TestBase):
-    pass
+from workloads.workload_base import WorkloadBase
 
 
 @pytest.mark.smoke
@@ -60,9 +38,9 @@ def test_variance_constant_offset(kind) -> None:
     """A finite common offset does not poison the first partial merge."""
 
     axes = (0, 2)
-    test = VarianceConstantTest((2, 3, 16), axes, kind, 1e20)
+    workload = VarianceConstantCase((2, 3, 16), axes, kind, 1e20)
     op = {"var": VarFwdOp, "std": StdFwdOp, "var_mean": VarMeanFwdOp}[kind](dim=axes, correction=0)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize("kind", ["amax", "amin"])
@@ -81,9 +59,9 @@ def test_variance_constant_offset(kind) -> None:
 def test_extrema_preserves_nan(shape, axes, dtype, kind) -> None:
     """NaNs survive row, leading and edge reductions, including across partials."""
 
-    test = ExtremaNanTest(shape, dtype, axes, kind)
+    workload = ExtremaNanCase(shape, dtype, axes, kind)
     op = AmaxFwdOp(dim=axes) if kind == "amax" else AminFwdOp(dim=axes)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -116,9 +94,9 @@ def test_extrema_leading_preserves_nan(shape, dtype, kind) -> None:
     short last slices), the one-launch vector walk over whole 16-byte tiles at two element
     widths, and the thread-block cluster that merges NaNs held by different CTAs (SM90)."""
 
-    test = ExtremaNanTest(shape, dtype, (0,), kind)
+    workload = ExtremaNanCase(shape, dtype, (0,), kind)
     op = AmaxFwdOp(dim=0) if kind == "amax" else AminFwdOp(dim=0)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -129,10 +107,10 @@ def test_extrema_tuned_preserves_nan() -> None:
     count leaves a multi-row candidate's last block short.
     """
 
-    test = ExtremaNanTest((37, 1001), torch.float16, (1,), "amax")
+    workload = ExtremaNanCase((37, 1001), torch.float16, (1,), "amax")
     op = AmaxFwdOp(dim=1)
     op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 _OPS = {
@@ -149,12 +127,12 @@ _OPS = {
 _FAMILIES = ("sum", "prod", "var")
 
 
-def _row_workload(op_kind: str, m: int, n: int, dtype: torch.dtype) -> TestBase:
+def _row_workload(op_kind: str, m: int, n: int, dtype: torch.dtype) -> WorkloadBase:
     if op_kind == "prod":
-        return ProdTest(m, n, dtype)
+        return ProdWorkload((m, n), dtype)
     if op_kind in ("std", "var", "var_mean"):
-        return WelfordTest(m, n, dtype, op_kind, correction=1)
-    return ReduceTest(m, n, dtype, op_kind)
+        return WelfordCase(m, n, dtype, op_kind, correction=1)
+    return ReduceCase(m, n, dtype, op_kind)
 
 
 def _row_cases() -> list:
@@ -189,8 +167,8 @@ def _row_cases() -> list:
 
 @pytest.mark.parametrize("op_kind, m, n, dtype", _row_cases())
 def test_reduce_rows(op_kind: str, m: int, n: int, dtype: torch.dtype) -> None:
-    test = _row_workload(op_kind, m, n, dtype)
-    test.check(_OPS[op_kind](dim=-1), *test.gen_inputs())
+    workload = _row_workload(op_kind, m, n, dtype)
+    check(workload, _OPS[op_kind](dim=-1), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -207,8 +185,8 @@ def test_sum_wide_fold_tail(m: int, n: int, threads: int) -> None:
     """
 
     op = SumFwdOp(dim=-1)
-    test = ReduceTest(m, n, torch.float32, "sum")
-    test.check(op, *test.gen_inputs())
+    workload = ReduceCase(m, n, torch.float32, "sum")
+    check(workload, op, *workload.gen_inputs())
     (entry,) = op._entries_built("reduce").values()
     assert entry.config["threads"] == threads
 
@@ -223,10 +201,10 @@ def test_reduce_untiled_autotune_unaligned_n() -> None:
     """
 
     m, n, dtype = 8, 7935, torch.float16
-    test = ReduceTest(m, n, dtype, "sum")
+    workload = ReduceCase(m, n, dtype, "sum")
     op = SumFwdOp(dim=-1)
     op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -246,14 +224,14 @@ def test_reduce_tiled_autotune(op_kind: str) -> None:
 
     m, n, dtype = 4, 39999, torch.float16
     if op_kind == "sum":
-        test = ReduceTest(m, n, dtype, "sum")
+        workload = ReduceCase(m, n, dtype, "sum")
         op = SumFwdOp(dim=-1)
         op.request_tune()
     else:
-        test = WelfordTest(m, n, dtype, "var", correction=1)
+        workload = WelfordCase(m, n, dtype, "var", correction=1)
         op = VarFwdOp(dim=-1)
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 def _check(op, x: torch.Tensor, **params) -> None:

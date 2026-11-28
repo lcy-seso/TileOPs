@@ -5,7 +5,7 @@ import math
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from workloads.device import run_device
 from workloads.elementwise import ElementwiseWorkload
 
@@ -81,7 +81,7 @@ def test_dropout_statistical_rate(n_total: int, dtype: torch.dtype, p: float) ->
     x = torch.ones(n_total, dtype=dtype, device=run_device())
     op = DropoutFwdOp(p=p, seed=42)
     workload = ElementwiseWorkload("DropoutFwdOp", (x,), p=p)
-    TestBase.check(workload, op, x)
+    check(workload, op, x)
 
 
 @DropoutLayoutFixture
@@ -206,7 +206,7 @@ def test_dropout_p0_identity(n_total: int, dtype: torch.dtype) -> None:
     x = torch.randn(n_total, dtype=dtype, device=run_device())
     op = DropoutFwdOp(p=0.0, seed=42)
     workload = ElementwiseWorkload("DropoutFwdOp", (x,), p=0.0)
-    TestBase.check(workload, op, x)
+    check(workload, op, x)
 
 
 @DropoutHostPathFixture
@@ -217,7 +217,7 @@ def test_dropout_p1_all_zeros(n_total: int, dtype: torch.dtype) -> None:
     x = torch.randn(n_total, dtype=dtype, device=run_device())
     op = DropoutFwdOp(p=1.0, seed=42)
     workload = ElementwiseWorkload("DropoutFwdOp", (x,), p=1.0)
-    TestBase.check(workload, op, x)
+    check(workload, op, x)
 
 
 @DropoutHostPathFixture
@@ -228,7 +228,7 @@ def test_dropout_training_false(n_total: int, dtype: torch.dtype) -> None:
     x = torch.randn(n_total, dtype=dtype, device=run_device())
     op = DropoutFwdOp(p=0.5, seed=42, training=False)
     workload = ElementwiseWorkload("DropoutFwdOp", (x,), p=0.5, training=False)
-    TestBase.check(workload, op, x)
+    check(workload, op, x)
 
 
 @DropoutShapeFixture

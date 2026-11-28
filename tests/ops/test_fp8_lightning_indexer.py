@@ -3,35 +3,31 @@ import re
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops.attention import FP8LightningIndexerFwdOp
 from workloads.attention.fp8_lightning_indexer import FP8LightningIndexerWorkload
 from workloads.device import run_device
 
 
-class FP8LightningIndexerTest(FP8LightningIndexerWorkload, TestBase):
-    pass
-
-
 @pytest.mark.smoke
 @pytest.mark.sm90
 def test_indexer_preserves_small_normal_weights() -> None:
-    workload = FP8LightningIndexerTest(1, 8, 64, 128, 128, 1)
-    workload.check(FP8LightningIndexerFwdOp(), *workload.gen_weight_boundary_inputs())
+    workload = FP8LightningIndexerWorkload(1, 8, 64, 128, 128, 1)
+    check(workload, FP8LightningIndexerFwdOp(), *workload.gen_weight_boundary_inputs())
 
 
 @pytest.mark.smoke
 @pytest.mark.sm90
 def test_indexer_keeps_large_finite_head_sums() -> None:
     """A head sum of 2^127 before a key scale of 2^-10 stays finite: 2^117."""
-    workload = FP8LightningIndexerTest(1, 8, 64, 128, 128, 1)
+    workload = FP8LightningIndexerWorkload(1, 8, 64, 128, 128, 1)
     q, k, weights, starts, ends, scales = workload.gen_weight_boundary_inputs()
     q.fill_(1)
     k.fill_(1)
     weights.zero_()
     weights[:, 0] = 2.0**120
     scales.fill_(2.0**-10)
-    workload.check(FP8LightningIndexerFwdOp(), q, k, weights, starts, ends, scales)
+    check(workload, FP8LightningIndexerFwdOp(), q, k, weights, starts, ends, scales)
 
 
 @pytest.mark.smoke
@@ -40,8 +36,8 @@ def test_indexer_partial_wave_empty_windows_without_clean_logits() -> None:
     """In the partial-wave launch, blocks whose rows all have empty or inverted windows score
     nothing, and windows reaching the last, partial key tile score it; with
     ``clean_logits=False`` the logits inside every window match the clean call."""
-    test = FP8LightningIndexerTest(1, 2050, 64, 128, 32772, 1, True)
-    index_q, index_k, weights, ks, ke = test.gen_inputs()
+    workload = FP8LightningIndexerWorkload(1, 2050, 64, 128, 32772, 1, True)
+    index_q, index_k, weights, ks, ke = workload.gen_inputs()
     ks, ke = ks.clone(), ke.clone()
     # Queries below 468 are the split wave's blocks on any SM90 part.
     ke[:64] = ks[:64]  # whole blocks score nothing
@@ -50,7 +46,7 @@ def test_indexer_partial_wave_empty_windows_without_clean_logits() -> None:
     ks[256:384], ke[256:384] = 32772 - 100, 32772  # only the last two tiles
     inputs = (index_q, index_k, weights, ks, ke)
     clean_op = FP8LightningIndexerFwdOp(clean_logits=True)
-    test.check(clean_op, *inputs)
+    check(workload, clean_op, *inputs)
     clean = clean_op(*inputs)
     raw = FP8LightningIndexerFwdOp(clean_logits=False)(*inputs)
     live = torch.isfinite(clean)
@@ -98,13 +94,13 @@ def test_indexer(
     clean_logits: bool,
     tune: bool,
 ) -> None:
-    test = FP8LightningIndexerTest(
+    workload = FP8LightningIndexerWorkload(
         batch, seq_len, heads, index_dim, seq_len_kv, kv_group, clean_logits
     )
     op = FP8LightningIndexerFwdOp(clean_logits=clean_logits)
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -132,10 +128,10 @@ def test_indexer_rejects_bf16_inputs_with_external_scale() -> None:
 def test_indexer_without_clean_logits_matches_inside_windows() -> None:
     """Without ``clean_logits`` the kernel skips the -inf fill and the per-key window mask; the
     logits inside every window are still the clean call's, which match the reference."""
-    test = FP8LightningIndexerTest(1, 2048, 64, 128, 4096, 1, True)
-    inputs = test.gen_inputs()
+    workload = FP8LightningIndexerWorkload(1, 2048, 64, 128, 4096, 1, True)
+    inputs = workload.gen_inputs()
     clean_op = FP8LightningIndexerFwdOp(clean_logits=True)
-    test.check(clean_op, *inputs)
+    check(workload, clean_op, *inputs)
     clean = clean_op(*inputs)
     raw = FP8LightningIndexerFwdOp(clean_logits=False)(*inputs)
     live = torch.isfinite(clean)
@@ -147,13 +143,13 @@ def test_indexer_without_clean_logits_matches_inside_windows() -> None:
 def test_indexer_empty_and_inverted_windows() -> None:
     """Rows whose window is empty, inverted or starts at the end of the keys hold -inf
     everywhere, and a block mixing them with live rows still scores the live ones."""
-    test = FP8LightningIndexerTest(1, 2048, 64, 128, 4096, 1, True)
-    index_q, index_k, weights, ks, ke = test.gen_inputs()
+    workload = FP8LightningIndexerWorkload(1, 2048, 64, 128, 4096, 1, True)
+    index_q, index_k, weights, ks, ke = workload.gen_inputs()
     ks, ke = ks.clone(), ke.clone()
     ke[1::4] = ks[1::4]  # empty
     ks[2::4], ke[2::4] = ke[2::4] + 7, ks[2::4]  # inverted
     ks[3::8] = 4096  # starts at the end of the keys
-    test.check(FP8LightningIndexerFwdOp(), index_q, index_k, weights, ks, ke)
+    check(workload, FP8LightningIndexerFwdOp(), index_q, index_k, weights, ks, ke)
 
 
 @pytest.mark.sm90
@@ -170,13 +166,13 @@ def test_indexer_empty_and_inverted_windows() -> None:
 def test_indexer_signed_external_key_scales(queries, keys, heads, index_dim, groups) -> None:
     """Random keys whose scales take random signs: each key row's scores take its own sign, in
     both row halves of a thread's accumulators."""
-    test = FP8LightningIndexerTest(1, queries, heads, index_dim, keys, groups)
-    q, k, weights, starts, ends, scales = test.gen_weight_boundary_inputs()
+    workload = FP8LightningIndexerWorkload(1, queries, heads, index_dim, keys, groups)
+    q, k, weights, starts, ends, scales = workload.gen_weight_boundary_inputs()
     q = torch.randn(q.shape, device=q.device).to(q.dtype)
     k = torch.randn(k.shape, device=k.device).to(k.dtype)
     weights = torch.randn(weights.shape, device=weights.device)
     scales = torch.randn(scales.shape, device=scales.device) / 448.0
-    test.check(FP8LightningIndexerFwdOp(), q, k, weights, starts, ends, scales)
+    check(workload, FP8LightningIndexerFwdOp(), q, k, weights, starts, ends, scales)
 
 
 @pytest.mark.smoke
@@ -187,9 +183,9 @@ def test_indexer_loads_windows_and_weights_unguarded() -> None:
     window and weight indices need none: no window bound or head weight is loaded into a
     variable of its own under a bounds test, the form the check lowers such a load to. One
     query, whose block's keys split over many CTAs."""
-    test = FP8LightningIndexerTest(1, 1, 64, 128, 16384, 1)
+    workload = FP8LightningIndexerWorkload(1, 1, 64, 128, 16384, 1)
     op = FP8LightningIndexerFwdOp()
-    test.check(op, *test.gen_weight_boundary_inputs())
+    check(workload, op, *workload.gen_weight_boundary_inputs())
     (kernel,) = op._entries_built("fp8_lightning_indexer").values()
     source = kernel.program(kernel._compile).get_kernel_source()
     assert "CuSeqLenKS[" in source and "Weights[" in source
@@ -208,12 +204,12 @@ def test_indexer_loads_windows_and_weights_unguarded() -> None:
 def test_indexer_assumes_nonnegative_external_scales(groups) -> None:
     from tileops.backend import BUILTIN
 
-    test = FP8LightningIndexerTest(1, 8, 64, 128, 128, groups)
-    q, k, weights, starts, ends, scales = test.gen_weight_boundary_inputs()
+    workload = FP8LightningIndexerWorkload(1, 8, 64, 128, 128, groups)
+    q, k, weights, starts, ends, scales = workload.gen_weight_boundary_inputs()
     q.fill_(1)
     k.fill_(1)
     weights.fill_(1)
     scales.fill_(0.5)
     scales[:, 1::2] = 0
     op = FP8LightningIndexerFwdOp(assume_nonnegative_scale=True, target=BUILTIN)
-    test.check(op, q, k, weights, starts, ends, scales)
+    check(workload, op, q, k, weights, starts, ends, scales)

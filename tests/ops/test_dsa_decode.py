@@ -2,17 +2,13 @@ import pytest
 import torch
 
 from tests.cuda_graph_contract import CapturedGraph
-from tests.workload_test_base import FixtureBase, TestBase, op_preferring
+from tests.workload_test_base import FixtureBase, check, op_preferring
 from tileops._kernels.attention import DSADecodeBasicKernel, DSADecodeKernel, DSADecodeWSKernel
 from tileops._utils import get_sm_version
 from tileops.attention import DSADenseFwdOp
 from tileops.backend import OpNotAvailableError
 from workloads.attention.dsa import DSADecodeWorkload
 from workloads.device import run_device
-
-
-class DSADecodeTest(DSADecodeWorkload, TestBase):
-    pass
 
 
 class DSADecodeFixture(FixtureBase):
@@ -112,7 +108,7 @@ def test_dsa_decode_decode(
     dtype: torch.dtype,
     tune: bool,
 ) -> None:
-    test = DSADecodeTest(
+    workload = DSADecodeWorkload(
         batch,
         heads,
         seq_len_q,
@@ -129,7 +125,7 @@ def test_dsa_decode_decode(
     op = DSADenseFwdOp(dim_tail, stride_kv, q_start_index_s, sm_scale=sm_scale)
     if tune:
         op.request_tune()
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.parametrize(
@@ -142,9 +138,9 @@ def test_dsa_decode_decode(
 )
 def test_dsa_decode_decode_tail_and_dtype(dim_tail, dtype) -> None:
     """BF16 preserves the output dtype; a zero tail omits the extra QK contraction."""
-    test = DSADecodeTest(1, 64, 7, 256, 512, dim_tail, 128, 1, 1, 256, dtype=dtype)
+    workload = DSADecodeWorkload(1, 64, 7, 256, 512, dim_tail, 128, 1, 1, 256, dtype=dtype)
     op = DSADenseFwdOp(dim_tail, 1, 256)
-    test.check(op, *test.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.sm89
@@ -153,10 +149,10 @@ def test_dsa_decode_decode_tail_and_dtype(dim_tail, dtype) -> None:
 def test_dsa_decode_refuses_what_99_kb_cannot_hold() -> None:
     """SM89 has no WGMMA and gives a block 99 KB of opt-in shared memory, too little for a
     head dim 2048 query tile, so the op refuses it before anything is built."""
-    test = DSADecodeTest(1, 16, 1, 2048, 2048, 64, 128, 1, 1, 2048)
+    workload = DSADecodeWorkload(1, 16, 1, 2048, 2048, 64, 128, 1, 1, 2048)
     op = DSADenseFwdOp(64, 1, 2048)
     with pytest.raises(ValueError, match="bytes of shared memory per block"):
-        op(*test.gen_inputs())
+        op(*workload.gen_inputs())
     for interface in DSADenseFwdOp.interfaces:
         assert not op._entries_built(interface)
 
@@ -193,18 +189,18 @@ def test_dsa_decode_decode_ignores_padded_topk_slots() -> None:
     dim, dim_tail, topk, stride_kv, heads_kv, q_start = 512, 64, 128, 1, 1, 1024
     generator = torch.Generator().manual_seed(0)
 
-    test = DSADecodeTest(
+    workload = DSADecodeWorkload(
         batch, heads, seq_len, seq_len_kv, dim, dim_tail, topk, stride_kv, heads_kv, q_start
     )
     op = DSADenseFwdOp(dim_tail, stride_kv, q_start)
-    q, kv, _ = test.gen_inputs()
+    q, kv, _ = workload.gen_inputs()
 
     # seq_len_kv is the padding the workloads write and the reference reads.
     in_range_pad = _padded_topk_indices(
         batch, seq_len, heads_kv, topk, seq_len_kv, seq_len_kv, generator
     )
     # The reference sums in float32 and rounds once; one fp16 ulp here is 1e-3.
-    test.check(op, q, kv, in_range_pad)
+    check(workload, op, q, kv, in_range_pad)
 
     expected = op(q, kv, in_range_pad)
     assert torch.isfinite(expected).all(), "an in-range padding slot produced a non-finite output"
@@ -238,18 +234,18 @@ def test_dsa_decode_ignores_keys_past_the_causal_limit(
     Each row selects distinct keys from the whole cache, so most of them lie past the limit.
     """
     seq_len, seq_len_kv, topk, q_start = 33, 1024, 256, 256
-    test = DSADecodeTest(
+    workload = DSADecodeWorkload(
         1, heads, seq_len, seq_len_kv, dim, dim_tail, topk, stride_kv, heads_kv, q_start,
         dtype=dtype,
     )  # fmt: skip
     op = DSADenseFwdOp(dim_tail, stride_kv, q_start)
-    q, kv, _ = test.gen_inputs()
+    q, kv, _ = workload.gen_inputs()
     generator = torch.Generator().manual_seed(0)
     rows = [
         torch.randperm(seq_len_kv, generator=generator)[:topk] for _ in range(seq_len * heads_kv)
     ]
     indices = torch.stack(rows).view(1, seq_len, heads_kv, topk).to(torch.int32).to(q.device)
-    test.check(op, q, kv, indices)
+    check(workload, op, q, kv, indices)
 
 
 @pytest.mark.in_tree_kernels
@@ -278,8 +274,10 @@ def test_dsa_decode_row_normalization(kernel, row) -> None:
     op = op_preferring(
         DSADenseFwdOp, "dsa_decode_pinned", Pinned, 64, 1, q_start, sm_scale=sm_scale
     )
-    test = DSADecodeTest(1, 64, seq_len, seq_len_kv, 512, 64, 128, 1, 1, q_start, sm_scale=sm_scale)
-    q, kv, indices = test.gen_inputs()
+    workload = DSADecodeWorkload(
+        1, 64, seq_len, seq_len_kv, 512, 64, 128, 1, 1, q_start, sm_scale=sm_scale
+    )
+    q, kv, indices = workload.gen_inputs()
     if row == "no-valid-index":
         indices[:, ::2] = seq_len_kv
     else:
@@ -287,7 +285,7 @@ def test_dsa_decode_row_normalization(kernel, row) -> None:
         kv[:, 0] = -4096
         indices.fill_(seq_len_kv)
         indices[..., 0] = 0
-    test.check(op, q, kv, indices)
+    check(workload, op, q, kv, indices)
     assert isinstance(next(op.iter_kernels()), Pinned)
     if row == "no-valid-index":
         assert op(q, kv, indices)[:, ::2].eq(0).all()
@@ -309,11 +307,11 @@ def test_dsa_decode_index_only(batch, seq_len, seq_len_kv, topk, with_sink) -> N
     the query's position still counts, and a sink of +inf zeroes its head while -inf leaves
     it as without a sink."""
     heads = 64
-    test = DSADecodeTest(
+    workload = DSADecodeWorkload(
         batch, heads, seq_len, seq_len_kv, 512, 0, topk, 1, 1, 0, is_causal=False,
         dtype=torch.bfloat16,
     )  # fmt: skip
-    q, kv, _ = test.gen_inputs()
+    q, kv, _ = workload.gen_inputs()
     generator = torch.Generator().manual_seed(0)
     rows = [torch.randperm(seq_len_kv, generator=generator)[:topk] for _ in range(batch * seq_len)]
     indices = torch.stack(rows).view(batch, seq_len, 1, topk).to(torch.int32)
@@ -323,7 +321,7 @@ def test_dsa_decode_index_only(batch, seq_len, seq_len_kv, topk, with_sink) -> N
         sink = torch.randn(heads, generator=generator)
         sink[0], sink[1] = float("inf"), float("-inf")
         inputs.append(sink.to(q.device))
-    test.check(DSADenseFwdOp(0, 1, 0, is_causal=False), *inputs)
+    check(workload, DSADenseFwdOp(0, 1, 0, is_causal=False), *inputs)
 
 
 @pytest.mark.sm90
@@ -349,18 +347,20 @@ def test_dsa_decode_graph_replay(seq_len_kv, topk) -> None:
     keys, index-only with a sink, at max_seq_len 4096 and 4128. The sink is no input of the
     workload, so the test captures through CapturedGraph; the replayed sinks sit near
     log(topk), as heavy as the keys, so a sink read stale changes the output."""
-    test = DSADecodeTest(
+    workload = DSADecodeWorkload(
         1, 64, 1, seq_len_kv, 512, 0, topk, 1, 1, 0, is_causal=False, dtype=torch.bfloat16
     )
     op = DSADenseFwdOp(0, 1, 0, is_causal=False)
-    graph = CapturedGraph((op, (*test.gen_inputs(), torch.randn(test.heads, device=run_device()))))
-    q, kv, _ = test.gen_inputs()
+    graph = CapturedGraph(
+        (op, (*workload.gen_inputs(), torch.randn(workload.heads, device=run_device())))
+    )
+    q, kv, _ = workload.gen_inputs()
     indices = _padded_topk_indices(1, 1, 1, topk, seq_len_kv, -1, torch.Generator().manual_seed(0))
-    sinks = torch.randn(test.heads, device=run_device()) + torch.tensor(topk).log()
+    sinks = torch.randn(workload.heads, device=run_device()) + torch.tensor(topk).log()
     inputs = (q, kv, indices, sinks)
     graph.renew(inputs)
     graph.replay()
-    test.check(op, *inputs, runs=lambda *args, **kwargs: graph.outputs[0])
+    check(workload, op, *inputs, runs=lambda *args, **kwargs: graph.outputs[0])
 
 
 @pytest.mark.sm90
@@ -389,11 +389,11 @@ def test_dsa_decode_skips_dead_tails(batch, seq_len, seq_len_kv, heads, topk, is
     past a row's last live slot weigh nothing, however the rows are spread over the SMs."""
     # Every causal row sees fewer than topk keys.
     q_start = topk // 2 if is_causal else 0
-    test = DSADecodeTest(
+    workload = DSADecodeWorkload(
         batch, heads, seq_len, seq_len_kv, 512, 0, topk, 1, 1, q_start, is_causal=is_causal,
         dtype=torch.bfloat16,
     )  # fmt: skip
-    q, kv, _ = test.gen_inputs()
+    q, kv, _ = workload.gen_inputs()
     generator = torch.Generator().manual_seed(0)
     rows = batch * seq_len
     # A causal row pads with seq_len_kv, an index-only one with -1.
@@ -406,7 +406,7 @@ def test_dsa_decode_skips_dead_tails(batch, seq_len, seq_len_kv, heads, topk, is
         sink = torch.randn(heads, generator=generator)
         sink[0], sink[1] = float("inf"), float("-inf")
         inputs.append(sink.to(q.device))
-    test.check(DSADenseFwdOp(0, 1, q_start, is_causal=is_causal), *inputs)
+    check(workload, DSADenseFwdOp(0, 1, q_start, is_causal=is_causal), *inputs)
 
 
 @pytest.mark.sm90
@@ -415,9 +415,9 @@ def test_dsa_decode_skips_dead_tails(batch, seq_len, seq_len_kv, heads, topk, is
 def test_dsa_decode_refuses_index_only_selection_off_dim_512() -> None:
     """Only the SM90 kernel for value dim 512 serves is_causal false; the others need the
     causal mask, so the op refuses a dim-256 call before anything is built."""
-    test = DSADecodeTest(1, 64, 1, 256, 256, 64, 128, 1, 1, 0, is_causal=False)
+    workload = DSADecodeWorkload(1, 64, 1, 256, 256, 64, 128, 1, 1, 0, is_causal=False)
     op = DSADenseFwdOp(64, 1, 0, is_causal=False)
     with pytest.raises(OpNotAvailableError, match="requires dim 512.*requires the causal mask"):
-        op(*test.gen_inputs())
+        op(*workload.gen_inputs())
     for interface in DSADenseFwdOp.interfaces:
         assert not op._entries_built(interface)

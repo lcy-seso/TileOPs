@@ -6,17 +6,13 @@ import pytest
 import torch
 
 from tests.cuda_graph_contract import check_replay
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops._ops.reduction import ArgmaxFwdOp, ArgminFwdOp
 from workloads.device import run_device
 from workloads.numerics import compare_outputs
 from workloads.reduction import ArgreduceCase, reduction_verification
 
 _OPS = {"argmax": ArgmaxFwdOp, "argmin": ArgminFwdOp}
-
-
-class ArgreduceTest(ArgreduceCase, TestBase):
-    pass
 
 
 def _check(op_kind: str, x: torch.Tensor, dim, keepdim: bool = False) -> None:
@@ -43,8 +39,8 @@ def _row_cases() -> list:
 
 @pytest.mark.parametrize("op_kind, m, n, dtype", _row_cases())
 def test_argreduce_rows(op_kind: str, m: int, n: int, dtype: torch.dtype) -> None:
-    test = ArgreduceTest(m, n, dtype, op_kind)
-    test.check(_OPS[op_kind](dim=-1), *test.gen_inputs())
+    workload = ArgreduceCase(m, n, dtype, op_kind)
+    check(workload, _OPS[op_kind](dim=-1), *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -89,7 +85,7 @@ def test_argreduce_dim_and_keepdim(
 @pytest.mark.smoke
 def test_argmax_graph_replay() -> None:
     """DeepSeek-V4-Flash's greedy pick over one token's float32 logits."""
-    check_replay(ArgreduceTest(1, 129280, torch.float32, "argmax"), ArgmaxFwdOp(dim=-1))
+    check_replay(ArgreduceCase(1, 129280, torch.float32, "argmax"), ArgmaxFwdOp(dim=-1))
 
 
 @pytest.mark.smoke

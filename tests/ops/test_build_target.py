@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from tests.build_target_facts import arch, compiles, described, other_arch, sm
-from tests.workload_test_base import TestBase
+from tests.workload_test_base import check
 from tileops.norm import RMSNormFwdOp
 from workloads.device import run_device
 from workloads.norm import RMSNormWorkload
@@ -19,7 +19,7 @@ def test_an_op_on_another_target_builds_its_own_program():
     inputs = workload.gen_inputs()
     index = inputs[0].device.index
     with compiles() as built:
-        TestBase.check(workload, RMSNormFwdOp((1024,), eps=workload.eps), *inputs)
+        check(workload, RMSNormFwdOp((1024,), eps=workload.eps), *inputs)
         real = list(built)
         with (
             described({index: {"arch": other_arch(index)}}),
@@ -27,7 +27,7 @@ def test_an_op_on_another_target_builds_its_own_program():
         ):
             RMSNormFwdOp((1024,), eps=workload.eps)(*inputs)
         other = built[len(real) :]
-        TestBase.check(workload, RMSNormFwdOp((1024,), eps=workload.eps), *inputs)
+        check(workload, RMSNormFwdOp((1024,), eps=workload.eps), *inputs)
     # The real target's programs may already be built by an earlier test in this process.
     assert set(real) <= {sm(arch(index))}
     assert other and set(other) == {sm(other_arch(index))}
@@ -48,12 +48,12 @@ def test_one_op_on_two_targets_builds_for_each():
         torch.accelerator.device_index(0),
         compiles() as built,
     ):
-        TestBase.check(workload, op, *first)
+        check(workload, op, *first)
         real = list(built)
         with pytest.raises(RuntimeError, match="NO_BINARY_FOR_GPU"):
             op(*second)
         other = built[len(real) :]
-        TestBase.check(workload, op, *first)
+        check(workload, op, *first)
         with pytest.raises(RuntimeError, match="NO_BINARY_FOR_GPU"):
             op(*second)
     assert set(real) <= {sm(arch(0))}

@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from tests.workload_test_base import FixtureBase, TestBase
+from tests.workload_test_base import FixtureBase, check
 from tileops.attention import MLAVarlenFwdOp
 from workloads.attention.mla import MLAVarlenWorkload, mla_varlen_inputs
 from workloads.numerics import compare_outputs
@@ -111,7 +111,7 @@ def test_mla_varlen_fwd_op(
         seq_lens, heads, dim_nope, dim_pe, dim_v, dtype, is_causal, sm_scale
     )
     op = MLAVarlenFwdOp(is_causal=is_causal, sm_scale=sm_scale)
-    TestBase.check(workload, op, *workload.gen_inputs())
+    check(workload, op, *workload.gen_inputs())
 
 
 @pytest.mark.smoke
@@ -147,4 +147,4 @@ def test_mla_varlen_dims_off_64(seq_lens) -> None:
     dims = (96, 32, 96)
     inputs = mla_varlen_inputs(seq_lens, 4, *dims, torch.bfloat16)
     workload = MLAVarlenWorkload(seq_lens, 4, *dims, torch.bfloat16)
-    TestBase.check(workload, MLAVarlenFwdOp(is_causal=True), *inputs)
+    check(workload, MLAVarlenFwdOp(is_causal=True), *inputs)
