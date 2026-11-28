@@ -30,7 +30,7 @@ The prebuilt dev image ships the whole stack — CUDA 13.2, PyTorch 2.14 (cu132)
 ```bash
 docker run --rm -it --gpus all \
   -v "$(pwd)":/workspace -w /workspace \
-  ghcr.io/tile-ai/tileops-dev:cuda13.2-torch2.14-tilelang0.1.15
+  ghcr.io/tile-ai/tileops-dev:cuda13.2-torch2.14-tilelang0.1.16
 
 # inside the container
 pip install -e . --no-deps

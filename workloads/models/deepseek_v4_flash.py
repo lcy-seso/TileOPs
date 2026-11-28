@@ -1,8 +1,8 @@
 """DeepSeek-V4-Flash's official ``inference/`` code, with torch in place of its TileLang kernels.
 
-``official_model`` imports the checkpoint repository's ``inference/model.py``, kept in
-``third_party/deepseek_v4_flash/``, with a torch module standing in for its ``kernel.py``, so
-the reference shares no kernel with TileOPs.
+``official_model`` imports the checkpoint repository's ``inference/model.py``, which the
+runner image places under ``/opt/tileops/references/deepseek_v4_flash/``, with a torch module
+standing in for its ``kernel.py``, so the reference shares no kernel with TileOPs.
 ``DEEPSEEK_V4_FLASH_CONFIG`` is DeepSeek-V4-Flash's published ``config.json``.
 """
 
@@ -126,13 +126,21 @@ def hc_split_sinkhorn(mixes, hc_scale, hc_base, hc_mult, sinkhorn_iters, eps):
     return pre, 2 * post, comb
 
 
-def _load_official() -> types.ModuleType:
+# Where the runner image's Dockerfile places model tests' file references.
+REFERENCE_DIR = Path("/opt/tileops/references")
+
+
+def _load_official(reference_dir: Path = REFERENCE_DIR) -> types.ModuleType:
     """Import the official ``model.py`` against a ``kernel`` module of this file's torch
     functions. ``rotate_activation`` is replaced too, so ``fast_hadamard_transform`` is not
     needed."""
-    # DeepSeek-V4-Flash's inference/model.py, unmodified at Hugging Face revision
-    # 60d8d70770c6776ff598c94bb586a859a38244f1, under the MIT license beside it.
-    path = Path(__file__).resolve().parents[2] / "third_party" / "deepseek_v4_flash" / "model.py"
+    # DeepSeek-V4-Flash's inference/model.py, unmodified at the Hugging Face revision the
+    # runner image's Dockerfile pins, under the MIT license beside it.
+    path = reference_dir / "deepseek_v4_flash" / "model.py"
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"{path} is missing: the runner image provides DeepSeek-V4-Flash's inference/model.py"
+        )
     kernel = types.ModuleType("kernel")
     for fn in (act_quant, fp4_act_quant, fp8_gemm, fp4_gemm, sparse_attn, hc_split_sinkhorn):
         setattr(kernel, fn.__name__, fn)

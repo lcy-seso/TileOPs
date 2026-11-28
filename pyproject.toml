@@ -8,7 +8,7 @@ dependencies = [
     # What .github/workflows/release.yml verifies on an SM90 device, from official PyPI, on
     # Python 3.12 and 3.13. Widening a pin means verifying it there first.
     "torch>=2.14.0,<2.15.0",
-    "tilelang==0.1.15",
+    "tilelang==0.1.16",
     "pyyaml>=6.0.1,<7",
 ]
 requires-python = ">=3.12"
@@ -98,13 +98,12 @@ skip = [
     "build",
     "dist",
     ".venv",
-    "third_party"
 ]
 
 [tool.ruff]
 line-length = 100
 # Markdown belongs to mdformat; ruff reads a fenced fragment as a whole file and de-indents it.
-extend-exclude = ["*.md", "third_party"]
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 # DOC102 is in preview; opt into that one rule, not preview behaviour at large.

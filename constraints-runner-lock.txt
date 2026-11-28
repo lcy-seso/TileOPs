@@ -46,8 +46,8 @@ fastapi-cloud-cli==0.23.0
 fastar==0.11.0
 fastsafetensors==0.3.3
 filelock==4.3.0
-fla-core==0.5.2
-flash-linear-attention==0.5.2
+fla-core==0.6.0
+flash-linear-attention==0.6.0
 flashinfer-python==0.7.3
 frozenlist==1.8.0
 fsspec==2026.7.0
@@ -123,7 +123,7 @@ nvidia-nvjitlink==13.3.33
 nvidia-nvshmem-cu13==3.4.5
 nvidia-nvtx==13.2.75
 nvidia-nvvm==13.3.73
-nvmath-python==1.0.0
+nvmath-python==1.0.1
 nvtx==0.2.15
 openai==2.53.0
 opencv-python-headless==5.0.0.93
@@ -200,7 +200,7 @@ sympy==1.14.0
 tabulate==0.10.0
 tiktoken==0.13.0
 tile-kernels==2.1.0
-tilelang==0.1.15
+tilelang==0.1.16
 tokenizers==0.23.3
 tokenspeed-mla==2.0.3
 tokenspeed-triton==3.9.10.post20261028

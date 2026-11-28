@@ -172,6 +172,19 @@ RUN uv pip install --no-deps cupti-python
 # Deps resolved, unlike cupti-python: all four are already pinned in the lock. Fatal, unlike the
 # bench baselines: the GEMM benchmark imports it with no fallback, so its absence fails rows.
 RUN uv pip install nvmath-python
+# Model tests' references that are files, not packages: DeepSeek-V4-Flash's inference/model.py
+# and its MIT license, unmodified at a pinned checkpoint revision. The sha256s pin the content.
+ARG DEEPSEEK_V4_FLASH_REVISION=60d8d70770c6776ff598c94bb586a859a38244f1
+# workloads/models/deepseek_v4_flash.py reads this path.
+RUN dir=/opt/tileops/references/deepseek_v4_flash \
+    && url="https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/resolve/${DEEPSEEK_V4_FLASH_REVISION}" \
+    && mkdir -p "${dir}" \
+    && curl -fsSL --retry 3 "${url}/inference/model.py" -o "${dir}/model.py" \
+    && curl -fsSL --retry 3 "${url}/LICENSE" -o "${dir}/LICENSE" \
+    && printf '%s  %s\n' \
+        ce962f1face79d4f633d36436576214057a7e11443c9789935e1deb5c6cd1d71 "${dir}/model.py" \
+        f2c6c602815669d292889e5be8c802f2ed950653b77999b1584e8e6aed25d040 "${dir}/LICENSE" \
+        | sha256sum -c -
 COPY scripts/ci/verify_runtime_stack.py /tmp/verify_runtime_stack.py
 RUN python /tmp/verify_runtime_stack.py
 # The image names itself, so a run can report which image produced it. Asking the registry which

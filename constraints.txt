@@ -11,7 +11,7 @@ torchaudio==2.11.0
 triton==3.8.0
 # The release pyproject.toml declares; the runner image installs it unless built from a
 # TILELANG_GIT_SHA. vllm pins 0.1.12; .github/runner/overrides.txt replaces that pin.
-tilelang==0.1.15
+tilelang==0.1.16
 # DeepSeek's TileKernels, a benchmark baseline.
 tile-kernels==2.1.0
 # ABI-coupled to tilelang: MUST sit inside the range tilelang's metadata declares
@@ -39,7 +39,7 @@ pytest-cov==7.1.0
 coverage==7.15.4
 # Bench baselines. The runner image installs these; the lock compile and the
 # `.[bench]` install both read the version from here.
-flash-linear-attention==0.5.2
+flash-linear-attention==0.6.0
 # Fused INT4 group quantization baseline; prebuild only its quantizer extension.
 deepspeed==0.19.7
 # Every other version follows this vllm's requirements.
@@ -50,7 +50,7 @@ flag_gems==5.0.2
 sqlalchemy==2.0.52
 # cuBLASLt's algorithm-selection API for the GEMM benchmark. Bare, not `[cu13]`: it maps torch's
 # own libcublasLt through cuda-pathfinder, where the extra installs a second CUDA-13 wheel set.
-nvmath-python==1.0.0
+nvmath-python==1.0.1
 # Tracks the image CUDA version; bump with it.
 cupti-python==13.2.0
 # Stack dump of a hung benchmark child before the runner kills it.
