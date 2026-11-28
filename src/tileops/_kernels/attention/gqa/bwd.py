@@ -242,7 +242,6 @@ def _gqa_bwd_kernel(
     dQ tile by TMA (SM90); otherwise they run on MMA and dQ is added element by element."""
     sm_scale = (1.0 / dim) ** 0.5 if sm_scale is None else sm_scale
     scale = sm_scale * LOG2E
-    check_head_groups(heads, heads_kv)
     groups = heads // heads_kv
     accum_dtype = "float"
     # One query head per key/value head writes its dK/dV outright; a shared one adds into f32.
@@ -459,6 +458,7 @@ class _GQABwdBase(Kernel):
         *,
         device_index: int | None = None,
     ) -> None:
+        check_head_groups(heads, heads_kv)
         super().__init__(device_index=device_index)
         self.batch = batch
         self.heads = heads

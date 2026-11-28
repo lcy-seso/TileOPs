@@ -5,6 +5,7 @@ from tests.cuda_graph_contract import check_replay
 from tests.workload_test_base import TestBase
 from tileops._kernels.constants import SM_RESIDENT_BLOCKS
 from tileops._kernels.indexing import EmbeddingCall
+from tileops._kernels.indexing.embedding import _residency_timed
 from tileops.backend import OpNotAvailableError
 from tileops.indexing import EmbeddingFwdOp
 from workloads.device import run_device
@@ -227,8 +228,9 @@ def _record_launches(kernel, monkeypatch) -> list:
 
 def _two_warps_reach_cta_limit(call: EmbeddingCall) -> bool:
     """Whether an SM of *call*'s device holds its CTA limit at two-warp CTAs."""
-    limit = SM_RESIDENT_BLOCKS.get(call.arch)
-    return limit is not None and call.threads_per_sm // limit == 2 * 32
+    if not _residency_timed(call.arch):
+        return False
+    return call.threads_per_sm // SM_RESIDENT_BLOCKS[call.arch] == 2 * 32
 
 
 @pytest.mark.smoke
