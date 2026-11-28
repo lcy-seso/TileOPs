@@ -91,7 +91,7 @@ class FP8LightningIndexerFwdOp(Op):
             ends: One past the last key of each query's window, ``(S,)``, int32 in
                 ``[0, S_kv]``.
             index_k_scale: Per-key scales of FP8 keys, ``(B, S_kv, G)``, float32; only with
-                float8_e4m3fn inputs, which then require it. ``None`` for a bf16 call.
+                float8_e4m3fn inputs. ``None`` makes the op quantize the keys.
 
         Returns:
             ``logits``, ``(B, S, S_kv, G)``, float32.

@@ -17,6 +17,12 @@ from tileops._utils import WARP_LANES
 __all__ = ["EmbeddingKernel"]
 
 
+def _residency_timed(arch: int) -> bool:
+    """Whether the launch shapes its CTAs by SM residency on *arch*: only on the
+    architectures that rule was timed on."""
+    return arch in SM_RESIDENT_BLOCKS and arch < 100
+
+
 @target_cache(maxsize=32)
 def _embedding_kernel(dim, dtype, index_dtype):
     # A thread reads back only the shared memory it landed itself, so no barrier orders it.
@@ -189,7 +195,7 @@ class EmbeddingKernel(Kernel, EmbeddingFwdInterface):
         # a pass keeps about 6 live (row, column, table row), which bounds the passes.
         target = self.build_target
         wave_threads = threads
-        if block_rows == 1 and target.arch in SM_RESIDENT_BLOCKS:
+        if block_rows == 1 and _residency_timed(target.arch):
             resident_threads = target.threads_per_sm // SM_RESIDENT_BLOCKS[target.arch]
             register_unit = 8
             budget = target.regs_per_sm // target.threads_per_sm // register_unit * register_unit
@@ -235,7 +241,7 @@ class EmbeddingKernel(Kernel, EmbeddingFwdInterface):
         target = self.build_target
         warps = -(-threads // WARP_LANES)
         per_sm = target.threads_per_sm // WARP_LANES // warps
-        if target.arch in SM_RESIDENT_BLOCKS:
+        if _residency_timed(target.arch):
             slots = cfg["block_rows"] * cfg["block_vectors"]
             stage = 0
             if staged:
