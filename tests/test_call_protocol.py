@@ -209,12 +209,13 @@ def test_a_param_changed_after_construction_is_solved_again():
     assert op._infer_output_shapes((3,))["y"] == (5,)
 
 
+@pytest.mark.usefixtures("isolated_registry")
 def test_a_target_kernel_is_built_again_for_a_changed_param():
     """A changed or in-place edited param builds another target kernel; a return to earlier
     params runs the kernel built from them."""
     from tileops.backend import _registry as registry
 
-    state, built = registry.snapshot(), []
+    built = []
 
     def build(x, *, scale, factors):
         built.append(scale)
@@ -222,28 +223,22 @@ def test_a_target_kernel_is_built_again_for_a_changed_param():
         weight = factors[0]
         return lambda x: x * scale * weight
 
-    try:
-        registry.DETECTORS.clear()
-        registry.BUILDERS.clear()
-        registry.default_target, registry._loaded = None, True
-        registry.register_detector("acme", lambda device: True)
-        # A probe op has no manifest entry, which `register_kernel_builder` requires.
-        registry.BUILDERS[("ProbeTargetParamFwdOp", "acme")] = build
-        params = {"scale": {"type": "float"}, "factors": {"type": "list[float]"}}
-        cls = _probe(lambda self, x: x, name="ProbeTargetParamFwdOp", params=params)
-        setattr(cls, PARAM_NAMES_ATTRIBUTE, ("scale", "factors"))
-        op, x = cls(scale=2.0, factors=[1.0]), torch.ones(2)
-        op(x)
-        op.scale = 3.0
-        assert op(x).tolist() == [3.0, 3.0]
-        op.factors[0] = 5.0
-        assert op(x).tolist() == [15.0, 15.0] and built == [2.0, 3.0, 3.0]
-        op.factors = [1.0]
-        assert op(x).tolist() == [3.0, 3.0]
-        op.scale = 2.0
-        assert op(x).tolist() == [2.0, 2.0] and built == [2.0, 3.0, 3.0]
-    finally:
-        registry.restore(state)
+    registry.register_detector("acme", lambda device: True)
+    # A probe op has no manifest entry, which `register_kernel_builder` requires.
+    registry.BUILDERS[("ProbeTargetParamFwdOp", "acme")] = build
+    params = {"scale": {"type": "float"}, "factors": {"type": "list[float]"}}
+    cls = _probe(lambda self, x: x, name="ProbeTargetParamFwdOp", params=params)
+    setattr(cls, PARAM_NAMES_ATTRIBUTE, ("scale", "factors"))
+    op, x = cls(scale=2.0, factors=[1.0]), torch.ones(2)
+    op(x)
+    op.scale = 3.0
+    assert op(x).tolist() == [3.0, 3.0]
+    op.factors[0] = 5.0
+    assert op(x).tolist() == [15.0, 15.0] and built == [2.0, 3.0, 3.0]
+    op.factors = [1.0]
+    assert op(x).tolist() == [3.0, 3.0]
+    op.scale = 2.0
+    assert op(x).tolist() == [2.0, 2.0] and built == [2.0, 3.0, 3.0]
 
 
 class _Functioning(torch.overrides.TorchFunctionMode):
@@ -896,7 +891,6 @@ _WRITTEN_PAIRS = {
         "out",
         "x",
     ),
-    "out between strided x": ({"outputs": _OUT}, _into_out, (0, 2), (1, 2), "out", "x"),
     "written x on read w": (_READ_AND_WRITTEN, _add_into_x, (0, 1), (2, 1), "x", "w"),
     "written x on written w": (_BOTH_WRITTEN, _add_into_both, (2, 1), (0, 1), "x", "w"),
 }
@@ -986,6 +980,29 @@ def test_a_written_tensor_overlapping_itself_is_rejected_before_the_call():
     assert storage.tolist() == [1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 1.0]
     empty = torch.zeros(0, 1).expand(0, 2)
     assert op(empty, torch.ones(0, 2)) is empty
+
+
+def test_written_views_interleaving_without_a_shared_byte_are_written():
+    """Views whose spans meet run where their bytes interleave apart: alternate elements of one
+    storage, and column slices of one matrix, as vLLM's query and key are slices of one qkv
+    buffer. Column slices sharing a column still raise before the call."""
+    storage = torch.arange(8.0)
+    op = _probe(_into_out, outputs=_OUT)()
+    op(storage[1:7:2], out=storage[0:6:2])
+    assert storage.tolist() == [1.0, 1.0, 3.0, 3.0, 5.0, 5.0, 6.0, 7.0]
+    matrix = {"dtype": "T", "shape": "[A, M]"}
+    both = _probe(
+        _add_into_both,
+        forall={"A": "Dim", "M": "Dim", "T": "DType[float32]"},
+        inputs={"x": {**matrix, "mutated": True}, "w": {**matrix, "mutated": True}},
+        outputs={},
+    )()
+    qkv = torch.zeros(4, 7)
+    both(qkv[:, :3], qkv[:, 3:6])
+    assert qkv[:, :6].eq(1).all() and qkv[:, 6].eq(0).all()
+    with pytest.raises(ValueError, match="x must not overlap w"):
+        both(qkv[:, :3], qkv[:, 2:5])
+    assert qkv[:, :6].eq(1).all()
 
 
 def test_a_written_tensor_ending_where_another_call_tensor_starts_is_written():
