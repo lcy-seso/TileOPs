@@ -12,6 +12,7 @@ from tileops._kernels.attention.fp8_lightning_indexer import (
 from tileops._kernels.constants import FP8_E4M3_MAX
 from tileops._kernels.kernel_base import Kernel, KernelInterface
 from tileops._ops.op_base import Op
+from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = ["FP8LightningIndexerFwdOp"]
@@ -58,7 +59,8 @@ class FP8LightningIndexerFwdOp(Op):
         """Build the op. Shapes and dtype are taken from each call.
 
         Args:
-            clean_logits: Manifest ``params.clean_logits``, ``bool``, default ``True``.
+            clean_logits: Set the logits of keys outside a query's window to ``-inf``;
+                otherwise those slots hold unspecified values.
             assume_nonnegative_scale: Skip sign checks on externally supplied key scales.
                 Set this only when every supplied scale is nonnegative. Defaults to ``False``.
             target: Which set of kernels serves this op — a target name, ``BUILTIN``
@@ -78,18 +80,21 @@ class FP8LightningIndexerFwdOp(Op):
         ends: torch.Tensor,
         index_k_scale: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Run the op on the inputs the manifest declares.
+        """Score every key in each query's window.
 
         Args:
-            index_q: Input tensor, dtype ``bfloat16 | float8_e4m3fn``.
-            index_k: Input tensor, dtype ``bfloat16 | float8_e4m3fn``.
-            weights: Input tensor, dtype ``float32``.
-            starts: Input tensor, dtype ``int32``.
-            ends: Input tensor, dtype ``int32``.
-            index_k_scale: Input tensor, dtype ``float32``. Optional.
+            index_q: Index queries, ``(B, S, H, D)``, bfloat16 or float8_e4m3fn.
+            index_k: Index keys, ``(B, S_kv, G, D)``, the dtype of ``index_q``; ``H`` is a
+                multiple of ``G``.
+            weights: Per-head weights, ``(S, H)``, float32.
+            starts: First key of each query's window, ``(S,)``, int32 in ``[0, S_kv]``.
+            ends: One past the last key of each query's window, ``(S,)``, int32 in
+                ``[0, S_kv]``.
+            index_k_scale: Per-key scales of FP8 keys, ``(B, S_kv, G)``, float32; only with
+                float8_e4m3fn inputs, which then require it. ``None`` for a bf16 call.
 
         Returns:
-            ``logits``, as the manifest declares.
+            ``logits``, ``(B, S, S_kv, G)``, float32.
         """
         check_scale_sign = index_k_scale is not None and not self.assume_nonnegative_scale
         if index_k_scale is None:
@@ -122,4 +127,4 @@ class FP8LightningIndexerFwdOp(Op):
 
     def roof_key(self) -> str:
         """Index scores contract at fp8 regardless of the input form."""
-        return "tensor_core.fp8"
+        return tensor_core_roof(torch.float8_e4m3fn)

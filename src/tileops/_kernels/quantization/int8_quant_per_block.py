@@ -18,6 +18,7 @@ from tileops._kernels.quantization.int8_codes import (
     quantize,
     widen,
 )
+from tileops._kernels.streaming_load import load16_evict_first
 from tileops._kernels.warp_reduce import warp_reduce
 
 __all__ = ["INT8QuantPerBlockFwdKernel", "INT8QuantPerBlockShiftedFwdKernel"]
@@ -116,12 +117,7 @@ def _int8_quant_per_block_kernel(m: int, k: int, dtype: str):
                 b, lo, count = extent(bx, tx)
                 for s in T.unroll(slots):
                     if exact or ((b < blocks) & (window(s, tx) < count)):
-                        T.call_extern(
-                            "handle",
-                            "tileops::load16_evict_first",
-                            T.address_of(values[s, 0]),
-                            T.address_of(x[lo + window(s, tx) * vec]),
-                        )
+                        load16_evict_first(values, (s, 0), x, lo + window(s, tx) * vec)
                 acc[0] = T.uint32(0)
                 for s in T.unroll(slots):
                     if exact or ((b < blocks) & (window(s, tx) < count)):
@@ -260,12 +256,7 @@ def _int8_quant_per_block_shifted_kernel(m: int, k: int, dtype: str):
                                         j * words + e // per_word
                                     ] | (T.cast(bits, "uint32") << shift)
                         else:
-                            T.call_extern(
-                                "handle",
-                                "tileops::load16_evict_first",
-                                T.address_of(raw[j * words]),
-                                T.address_of(x[v * vec]),
-                            )
+                            load16_evict_first(raw, j * words, x, v * vec)
                 # The run, shifted to the start of ``own``: ``skip`` whole words, then
                 # ``part`` elements of a word.
                 skip = first % vec // per_word

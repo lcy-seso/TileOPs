@@ -10,7 +10,6 @@ from tileops._kernels.mamba import (
     SSDChunkStateFwdKernel,
 )
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 
 __all__ = ["SSDChunkStateFwdOp"]
 
@@ -29,6 +28,8 @@ class SSDChunkStateFwdOp(Op):
               * (1 if seq_idx is None else (seq_idx[b,c*Q+Q-1] >= 0 and seq_idx[b,c*Q+l] == seq_idx[b,c*Q+Q-1]))
 
     """
+
+    contraction_dtype_from = "x"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "ssd_chunk_state_fwd": SSDChunkStateFwdKernel
@@ -90,7 +91,3 @@ class SSDChunkStateFwdOp(Op):
             seq_idx = seq_idx.contiguous()
 
         return kernel(x, B, dt, dA_cumsum, seq_idx)
-
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["x"][1])

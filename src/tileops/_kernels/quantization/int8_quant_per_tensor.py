@@ -23,6 +23,7 @@ from tileops._kernels.quantization.int8_codes import (
     quantize,
     widen,
 )
+from tileops._kernels.streaming_load import load16, load16_evict_first
 from tileops._kernels.warp_reduce import warp_reduce
 from tileops._utils import WARP_LANES
 
@@ -75,16 +76,6 @@ def _int8_quant_per_tensor_kernel(n: int, dtype: str, grid: int, threads: int):
         def at(t, bx, tx):
             # Offset of thread ``tx``'s vector in tile ``t`` of CTA ``bx``.
             return (t * grid + bx) * tile + tx * vec
-
-        @T.macro
-        def load_vector(dst, row, src, offset, evict_first: bool):
-            # evict_first for data nothing reads from memory again.
-            T.call_extern(
-                "handle",
-                "tileops::load16_evict_first" if evict_first else "tileops::load16",
-                T.address_of(dst[row, 0]),
-                T.address_of(src[offset]),
-            )
 
         @T.macro
         def block_max(val, warp_max):
@@ -146,17 +137,13 @@ def _int8_quant_per_tensor_kernel(n: int, dtype: str, grid: int, threads: int):
                             q[offset + c] = code(T.cast(extra[0, c], "float32"), num, prescale)
             first = reg + smem + rounds * batch
             for i in T.unroll(rest):
-                load_vector(cur, i, x, at(first + i, bx, tx), True)
+                load16_evict_first(cur, (i, 0), x, at(first + i, bx, tx))
             for i in T.unroll(rest):
                 store(q, out, num, at(first + i, bx, tx), cur, i, prescale)
             for r in T.serial(rounds):
                 for i in T.unroll(batch):
-                    load_vector(
-                        cur,
-                        i,
-                        x,
-                        at(reg + smem + (rounds - 1 - r) * batch + i, bx, tx),
-                        True,
+                    load16_evict_first(
+                        cur, (i, 0), x, at(reg + smem + (rounds - 1 - r) * batch + i, bx, tx)
                     )
                 for i in T.unroll(batch):
                     store(
@@ -203,10 +190,10 @@ def _int8_quant_per_tensor_kernel(n: int, dtype: str, grid: int, threads: int):
                 # of vectors. Only the last CTA has a tail, and it has no ragged tile. Both
                 # are read first and held in registers.
                 if ragged > 0 and bx < ragged:
-                    load_vector(extra, 0, x, at(whole, bx, tx), True)
+                    load16_evict_first(extra, (0, 0), x, at(whole, bx, tx))
                 if tail > 0 and bx == grid - 1:
                     if tx < tail // vec:
-                        load_vector(extra, 0, x, tiles * tile + tx * vec, True)
+                        load16_evict_first(extra, (0, 0), x, tiles * tile + tx * vec)
                     elif tail % vec > 0 and tx == tail // vec:
                         # Element by element; the rest of the vector stays 0.
                         offset = tiles * tile + tx * vec
@@ -223,19 +210,13 @@ def _int8_quant_per_tensor_kernel(n: int, dtype: str, grid: int, threads: int):
                 # nothing reads them from memory again; the streamed ones stay cacheable for
                 # phase 2.
                 for j in T.unroll(reg):
-                    load_vector(in_regs, j, x, at(j, bx, tx), True)
+                    load16_evict_first(in_regs, (j, 0), x, at(j, bx, tx))
                 for j in T.unroll(reg):
                     fold(acc, in_regs, j)
                 for r in T.serial(T.ceildiv(smem, batch)):
                     for i in T.unroll(batch):
                         if r * batch + i < smem:
-                            load_vector(
-                                cur,
-                                i,
-                                x,
-                                at(reg + r * batch + i, bx, tx),
-                                True,
-                            )
+                            load16_evict_first(cur, (i, 0), x, at(reg + r * batch + i, bx, tx))
                     for i in T.unroll(batch):
                         if r * batch + i < smem:
                             fold(acc, cur, i)
@@ -243,23 +224,11 @@ def _int8_quant_per_tensor_kernel(n: int, dtype: str, grid: int, threads: int):
                                 in_smem[r * batch + i, tx * width + c] = cur[i, c]
                 for r in T.serial(rounds):
                     for i in T.unroll(batch):
-                        load_vector(
-                            cur,
-                            i,
-                            x,
-                            at(reg + smem + r * batch + i, bx, tx),
-                            False,
-                        )
+                        load16(cur, (i, 0), x, at(reg + smem + r * batch + i, bx, tx))
                     for i in T.unroll(batch):
                         fold(acc, cur, i)
                 for i in T.unroll(rest):
-                    load_vector(
-                        cur,
-                        i,
-                        x,
-                        at(reg + smem + rounds * batch + i, bx, tx),
-                        False,
-                    )
+                    load16(cur, (i, 0), x, at(reg + smem + rounds * batch + i, bx, tx))
                 for i in T.unroll(rest):
                     fold(acc, cur, i)
                 if ragged > 0 and bx < ragged:

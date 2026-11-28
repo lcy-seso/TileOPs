@@ -409,50 +409,66 @@ class _Stub:
 
 
 def _linear_attention_kernels() -> list:
-    """Linear-attention kernels with custom tuning loops."""
+    """Linear-attention kernels with custom tuning loops: the module holding each one's
+    builders, the module whose ``candidate_busy_ms`` its loop reads, and the kernel."""
+    from tileops._kernels.linear_attention import step_decode
+    from tileops._kernels.linear_attention.call_spec import DeltaNetDecodeCall, GLADecodeCall
     from tileops._kernels.linear_attention.deltanet import recurrent as deltanet
     from tileops._kernels.linear_attention.gla import chunk_bwd, chunk_fwd
     from tileops._kernels.linear_attention.gla import recurrent as gla
 
+    def deltanet_call(dim, dtype):
+        return DeltaNetDecodeCall(batch=1, heads=2, dim_k=dim, dim_v=dim, dtype=dtype)
+
+    def gla_call(dtype):
+        return GLADecodeCall(batch=1, heads=2, dim_k=64, dim_v=64, scale=0.125, dtype=dtype)
+
     return [
         pytest.param(
             deltanet,
-            lambda: deltanet.DeltaNetDecodeKernel(1, 2, 64, 64, "bfloat16"),
+            step_decode,
+            lambda: deltanet.DeltaNetDecodeKernel(deltanet_call(64, torch.bfloat16)),
             marks=pytest.mark.cuda_only("cuda-kernel"),
             id="deltanet-decode",
         ),
         # The low-precision warp-decode program serves SM90; generic decode also serves SM80/SM89.
         pytest.param(
             deltanet,
-            lambda: deltanet.DeltaNetDecodeWarpKernel(1, 2, 128, 128, "bfloat16"),
+            step_decode,
+            lambda: deltanet.DeltaNetDecodeWarpKernel(deltanet_call(128, torch.bfloat16)),
             marks=pytest.mark.sm90,
             id="deltanet-decode-warp",
         ),
         pytest.param(
             deltanet,
-            lambda: deltanet.DeltaNetDecodeFP32Kernel(1, 2, 64, 64),
+            step_decode,
+            lambda: deltanet.DeltaNetDecodeFP32Kernel(deltanet_call(64, torch.float32)),
             marks=pytest.mark.cuda_only("cuda-kernel"),
             id="deltanet-decode-fp32",
         ),
         pytest.param(
             gla,
-            lambda: gla.GLADecodeKernel(1, 2, 64, 64, 0.125, "bfloat16"),
+            step_decode,
+            lambda: gla.GLADecodeKernel(gla_call(torch.bfloat16)),
             marks=pytest.mark.cuda_only("cuda-kernel"),
             id="gla-decode",
         ),
         pytest.param(
             gla,
-            lambda: gla.GLADecodeFP32Kernel(1, 2, 64, 64, 0.125),
+            step_decode,
+            lambda: gla.GLADecodeFP32Kernel(gla_call(torch.float32)),
             marks=pytest.mark.cuda_only("cuda-kernel"),
             id="gla-decode-fp32",
         ),
         pytest.param(
+            chunk_fwd,
             chunk_fwd,
             lambda: chunk_fwd.GLAChunkFwdKernel(1, 128, 2, 64, 64, 64, 0.125),
             marks=pytest.mark.cuda_only("cuda-kernel"),
             id="gla-chunk-fwd",
         ),
         pytest.param(
+            chunk_bwd,
             chunk_bwd,
             lambda: chunk_bwd.GLAChunkBwdKernel(1, 128, 2, 64, 64, 64, 0.125, torch.float16),
             marks=pytest.mark.cuda_only("cuda-kernel"),
@@ -461,11 +477,11 @@ def _linear_attention_kernels() -> list:
     ]
 
 
-def _stubbed(monkeypatch, module, make) -> tuple:
+def _stubbed(monkeypatch, builders, make) -> tuple:
     """*make*'s kernel with its builders and launches stubbed, and the configs it publishes."""
     kernel = make()
-    for name in [n for n in vars(module) if n.endswith("_tl")]:
-        monkeypatch.setattr(module, name, _Stub())
+    for name in [n for n in vars(builders) if n.endswith("_tl")]:
+        monkeypatch.setattr(builders, name, _Stub())
     monkeypatch.setattr(kernel, "forward", _Stub())
     published = []
     monkeypatch.setattr(kernel, "_publish", lambda config, build, *facts: published.append(config))
@@ -473,10 +489,10 @@ def _stubbed(monkeypatch, module, make) -> tuple:
 
 
 @pytest.mark.smoke
-@pytest.mark.parametrize(("module", "make"), _linear_attention_kernels())
-def test_a_linear_attention_sweep_keeps_the_lowest_busy_reading(monkeypatch, module, make):
+@pytest.mark.parametrize(("builders", "timed", "make"), _linear_attention_kernels())
+def test_a_linear_attention_sweep_keeps_the_lowest_busy_reading(monkeypatch, builders, timed, make):
     """Every candidate is read by the tuner's reading, and the lowest reading is published."""
-    kernel, published = _stubbed(monkeypatch, module, make)
+    kernel, published = _stubbed(monkeypatch, builders, make)
     swept = []
     candidates = kernel.tuning_candidates
 
@@ -486,7 +502,7 @@ def test_a_linear_attention_sweep_keeps_the_lowest_busy_reading(monkeypatch, mod
 
     monkeypatch.setattr(kernel, "tuning_candidates", recorded)
     readings = []
-    monkeypatch.setattr(module, "candidate_busy_ms", _lowest_in_the_middle(readings, swept))
+    monkeypatch.setattr(timed, "candidate_busy_ms", _lowest_in_the_middle(readings, swept))
 
     kernel.autotune()
 
@@ -496,11 +512,13 @@ def test_a_linear_attention_sweep_keeps_the_lowest_busy_reading(monkeypatch, mod
 
 
 @pytest.mark.smoke
-@pytest.mark.parametrize(("module", "make"), _linear_attention_kernels())
-def test_a_linear_attention_sweep_fails_when_no_reading_can_be_taken(monkeypatch, module, make):
+@pytest.mark.parametrize(("builders", "timed", "make"), _linear_attention_kernels())
+def test_a_linear_attention_sweep_fails_when_no_reading_can_be_taken(
+    monkeypatch, builders, timed, make
+):
     """A loop skips a candidate that fails, but not a reading the collector failed to take."""
-    kernel, published = _stubbed(monkeypatch, module, make)
-    monkeypatch.setattr(module, "candidate_busy_ms", _unavailable)
+    kernel, published = _stubbed(monkeypatch, builders, make)
+    monkeypatch.setattr(timed, "candidate_busy_ms", _unavailable)
 
     with pytest.raises(cupti.CUPTIError, match="unavailable"):
         kernel.autotune()

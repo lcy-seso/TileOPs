@@ -19,7 +19,6 @@ from tileops._kernels.attention.call_spec import (
 )
 from tileops._kernels.kernel_base import Kernel, KernelInterface
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = [
@@ -43,6 +42,8 @@ class NSATopKVarlenFwdOp(Op):
     ``cu_seqlens`` marks the boundaries, so the batch size and the chunk count come from
     the call rather than from construction.
     """
+
+    contraction_dtype_from = "q"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "nsa_topk_varlen_kernel": NSATopKVarlenKernel
@@ -124,10 +125,6 @@ class NSATopKVarlenFwdOp(Op):
             ),
         )(*tensors)
 
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])
-
 
 class NSAVarlenFwdOp(Op):
     """Native Sparse Attention (NSA) sparse forward over a ragged batch.
@@ -147,6 +144,8 @@ class NSAVarlenFwdOp(Op):
     FlashAttention does: inputs whose QK products, scaled scores or value sums pass
     float32's range are not supported.
     """
+
+    contraction_dtype_from = "q"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "nsa_fwd_varlen_kernel": NSAFwdVarlenKernel,
@@ -254,10 +253,6 @@ class NSAVarlenFwdOp(Op):
             ),
         )(*tensors)
 
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])
-
 
 class NSACompressedVarlenFwdOp(Op):
     """Native Sparse Attention (NSA) compression forward over a ragged batch.
@@ -271,6 +266,8 @@ class NSACompressedVarlenFwdOp(Op):
     Sequence layout is packed: ``cu_seqlens`` marks the request boundaries, so the batch
     size and the chunk count come from the call rather than from construction.
     """
+
+    contraction_dtype_from = "q"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "nsa_compressed_fwd_varlen_kernel": NSACompressedFwdVarlenKernel,
@@ -353,7 +350,3 @@ class NSACompressedVarlenFwdOp(Op):
                 device=q.device,
             ),
         )(*tensors)
-
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])

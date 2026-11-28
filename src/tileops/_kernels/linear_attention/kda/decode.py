@@ -6,6 +6,7 @@ from tileops._kernels.kernel_base import Entry, Kernel
 from tileops._kernels.linear_attention.call_spec import (
     KDACall,
     KDAFwdInterface,
+    build_entry,
 )
 from tileops._kernels.linear_attention.delta_decode import decode_launch
 from tileops._kernels.linear_attention.kda.decode_program import decode_program
@@ -36,24 +37,9 @@ class KDARecurrentDecodeFwdKernel(Kernel, KDAFwdInterface):
 
     @classmethod
     def entry_for(cls, call: KDACall) -> Entry:
-        index = call.device_index
-        identity = (
-            call.batch,
-            call.heads,
-            call.value_heads,
-            call.dim_k,
-            call.dim_v,
-            call.scale,
-            call.l2norm,
-            call.gate_in_kernel,
-            call.has_dt_bias,
-            call.lower_bound,
-            call.state_v_first,
-            call.pooled,
-            call.dtype,
-            index,
-        )
-        return identity, lambda: cls(
+        return build_entry(
+            cls,
+            call,
             batch=call.batch,
             heads=call.heads,
             value_heads=call.value_heads,
@@ -67,7 +53,6 @@ class KDARecurrentDecodeFwdKernel(Kernel, KDAFwdInterface):
             state_v_first=call.state_v_first,
             pooled=call.pooled,
             dtype=call.dtype,
-            device_index=index,
         )
 
     def __init__(

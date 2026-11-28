@@ -65,13 +65,12 @@ class MeanPoolingFwdOp(Op):
         """Build the op. Shapes and dtype are taken from the first call.
 
         Args:
-            chunk_size: Manifest ``params.chunk_size``, ``int``, a positive multiple of 32.
-            accum_dtype: Manifest ``params.accum_dtype``, ``torch.dtype`` — what a chunk sum
-                accumulates in.
+            chunk_size: Tokens per chunk, a positive multiple of 32.
+            accum_dtype: The dtype a chunk sum accumulates in.
             validate_inputs: Check ``cu_seqlens`` synchronously on each call.
                 Disable during CUDA Graph capture; shapes and dtypes are always checked.
-            target: Backend target to serve this op, or ``None`` to decide from the input
-                device.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.validate_inputs = validate_inputs
         self.chunk_size = chunk_size

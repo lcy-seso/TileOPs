@@ -169,20 +169,55 @@ class _MLAPagedBase(Kernel, MLAPagedFwdInterface):
         index = call.device_index
         return (*args.values(), index), lambda: cls(**args, device_index=index)
 
-    def _setup(self, heads, s_q, dim, dim_v, page_size, is_causal, sm_scale, dtype, cache_dtype):
+    @classmethod
+    def refusal(cls, call: MLAPagedCall) -> str | None:
+        """Why *call* is outside the shapes both schedules serve."""
+        if call.dtype not in ATTENTION_DTYPES:
+            return f"serves float16 and bfloat16 queries, got {call.dtype}"
+        return super().refusal(call)
+
+    def __init__(
+        self,
+        heads: int,
+        s_q: int,
+        dim: int,
+        dim_v: int,
+        page_size: int,
+        is_causal: bool,
+        sm_scale: float | None,
+        dtype: torch.dtype,
+        cache_dtype: torch.dtype,
+        config: dict | None = None,
+        device_index: int | None = None,
+    ):
+        """Hold one model's decode geometry.
+
+        Args:
+            heads: Query heads.
+            s_q: Query tokens of a request.
+            dim: Width of a cache row, the key.
+            dim_v: Width of the value, the row's first columns.
+            page_size: Rows of a page.
+            is_causal: Whether a query row sees only keys at or before its position.
+            sm_scale: Score scale, or None for ``dim ** -0.5``.
+            dtype: Query and output dtype.
+            cache_dtype: Cache dtype; float8_e4m3fn dequantizes by the call's scale.
+            config: ``MLAPagedFwdKernel``'s tile sizes, or None for the widest the device
+                holds; the seesaw's geometry is fixed and reads none.
+            device_index: The device the program is built for, or None for the current one.
+        """
+        super().__init__(device_index=device_index)
         self.heads, self.s_q, self.dim, self.dim_v = heads, s_q, dim, dim_v
         self.page_size, self.dtype = page_size, dtype
         # A 16-bit cache passes no scale; the kernel still takes one and multiplies by it.
-        device = (
-            torch.device("cuda", self.device_index)
-            if self.device_index is not None
-            else torch.device("cuda")
+        self._unit = torch.ones(
+            1, dtype=torch.float32, device=torch.device("cuda", self.device_index)
         )
-        self._unit = torch.ones(1, dtype=torch.float32, device=device)
-        return (
+        self._args = (
             heads, s_q, dim, dim_v, page_size, is_causal, sm_scale,
             self.dtype_str, self.dtype_to_str(cache_dtype),
         )  # fmt: skip
+        self.init_config(config)
 
     def forward(
         self,
@@ -216,8 +251,6 @@ class MLAPagedSeesawKernel(_MLAPagedBase):
     @classmethod
     def refusal(cls, call: MLAPagedCall) -> str | None:
         """Why *call* is outside the shapes this schedule serves."""
-        if call.dtype not in ATTENTION_DTYPES:
-            return f"serves float16 and bfloat16 queries, got {call.dtype}"
         if (call.dim_v, call.dim - call.dim_v) != (512, 64):
             # The query, two key tiles and the exchange buffers fill the shared memory of an
             # SM90 block at a 512-wide value and a 64-wide rope part.
@@ -227,46 +260,9 @@ class MLAPagedSeesawKernel(_MLAPagedBase):
             return f"loads a 64-key tile from one page, got page size {call.page_size}"
         return super().refusal(call)
 
-    def __init__(
-        self,
-        heads: int,
-        s_q: int,
-        dim: int,
-        dim_v: int,
-        page_size: int,
-        is_causal: bool,
-        sm_scale: float | None,
-        dtype: torch.dtype,
-        cache_dtype: torch.dtype,
-        config: dict | None = None,
-        device_index: int | None = None,
-    ):
-        """Build the program for one model's decode geometry.
-
-        Args:
-            heads: Query heads.
-            s_q: Query tokens of a request.
-            dim: Width of a cache row, the key.
-            dim_v: Width of the value, the row's first columns.
-            page_size: Rows of a page.
-            is_causal: Whether a query row sees only keys at or before its position.
-            sm_scale: Score scale, or None for ``dim ** -0.5``.
-            dtype: Query and output dtype.
-            cache_dtype: Cache dtype; float8_e4m3fn dequantizes by the call's scale.
-            config: Unused; the schedule's geometry is fixed.
-            device_index: The device the program is built for, or None for the current one.
-        """
-        super().__init__(device_index=device_index)
-        self._args = self._setup(
-            heads, s_q, dim, dim_v, page_size, is_causal, sm_scale, dtype, cache_dtype
-        )
-        self.sm_count = self.build_target.sm_count
-        self.init_config(config)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.program(self._compile)
-
-    @property
-    def default_config(self) -> dict:
-        return {}
 
     def num_splits(self, batch: int, width: int) -> int:
         """Runs a request's tiles are cut into: enough blocks to fill the SMs once.
@@ -278,7 +274,11 @@ class MLAPagedSeesawKernel(_MLAPagedBase):
         blocks = batch * -(-self.s_q * self.heads // 64)
         tiles = -(-width * self.page_size // 64)
         splits = 1
-        while blocks * splits * 2 <= self.sm_count and tiles >= splits * 4 and splits < 32:
+        while (
+            blocks * splits * 2 <= self.build_target.sm_count
+            and tiles >= splits * 4
+            and splits < 32
+        ):
             splits *= 2
         return splits
 
@@ -338,48 +338,15 @@ class MLAPagedFwdKernel(_MLAPagedBase):
     @classmethod
     def refusal(cls, call: MLAPagedCall) -> str | None:
         """Why *call* is outside the shapes this schedule serves."""
-        if call.dtype not in ATTENTION_DTYPES:
-            return f"serves float16 and bfloat16 queries, got {call.dtype}"
-        need = cls._shared_bytes(call.dim, call.dim_v, call.dtype.itemsize, cls._CANDIDATES[-1])
-        if call.smem_budget and need > call.smem_budget:
-            return f"needs {need} bytes of shared memory at its narrowest tile, over {call.smem_budget}"
+        if call.dtype in ATTENTION_DTYPES and call.smem_budget:
+            need = cls._shared_bytes(call.dim, call.dim_v, call.dtype.itemsize, cls._CANDIDATES[-1])
+            if need > call.smem_budget:
+                return f"needs {need} bytes of shared memory at its narrowest tile, over {call.smem_budget}"
         return super().refusal(call)
 
-    def __init__(
-        self,
-        heads: int,
-        s_q: int,
-        dim: int,
-        dim_v: int,
-        page_size: int,
-        is_causal: bool,
-        sm_scale: float | None,
-        dtype: torch.dtype,
-        cache_dtype: torch.dtype,
-        config: dict | None = None,
-        device_index: int | None = None,
-    ):
-        """Build the program for one model's decode geometry; arguments as the seesaw's.
-
-        Args:
-            heads: Query heads.
-            s_q: Query tokens of a request.
-            dim: Width of a cache row, the key.
-            dim_v: Width of the value, the row's first columns.
-            page_size: Rows of a page.
-            is_causal: Whether a query row sees only keys at or before its position.
-            sm_scale: Score scale, or None for ``dim ** -0.5``.
-            dtype: Query and output dtype.
-            cache_dtype: Cache dtype; float8_e4m3fn dequantizes by the call's scale.
-            config: Tile sizes, or None for the widest the device holds.
-            device_index: The device the program is built for, or None for the current one.
-        """
-        super().__init__(device_index=device_index)
-        self._args = self._setup(
-            heads, s_q, dim, dim_v, page_size, is_causal, sm_scale, dtype, cache_dtype
-        )
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.kernel = _mla_paged_kernel(*self._args)
-        self.init_config(config)
 
     @property
     def default_config(self) -> dict:

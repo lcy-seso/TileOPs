@@ -22,7 +22,7 @@ from benchmarks.baselines import (
     vllm_op,
 )
 from benchmarks.timing import bench_kernel
-from tileops._utils import get_sm_version
+from tileops._utils import device_facts
 from tileops._utils.cupti import median_busy_ms
 from tileops.gemm import GEMMFP8FwdOp, GEMMFwdOp, GEMMINT8W8A8FwdOp, GEMMW4A8FwdOp, GEMMW4A16FwdOp
 from workloads.gemm import (
@@ -185,7 +185,7 @@ def _flashinfer_fp8_blockscale_1d2d(workload: GEMMFP8Workload) -> Callable[..., 
         ValueError: When the row falls outside that path.
     """
     block_size = 128
-    if get_sm_version() != 90:
+    if device_facts().arch != 90:
         raise ValueError("FlashInfer FP8 blockscale GEMM requires SM90")
     if workload.n <= 0 or workload.n % 64:
         raise ValueError("FlashInfer FP8 blockscale GEMM requires positive N divisible by 64")
@@ -221,7 +221,7 @@ def _deepgemm_fp8(workload: GEMMFP8Workload) -> Callable[..., torch.Tensor]:
         else workload.out_dtype
     )
 
-    arch = get_sm_version()
+    arch = device_facts().arch
     output_alignment = 16 // torch.empty((), dtype=intermediate_dtype).element_size()
     if not (90 <= arch < 110) or workload.k <= 0 or workload.n <= 0:
         raise ValueError("DeepGEMM FP8 requires SM9x/SM10x and positive N/K")
@@ -273,7 +273,7 @@ def _deepgemm_bf16_nt(workload: GEMMWorkload) -> Callable[..., torch.Tensor] | N
         or workload.k <= 0
         or workload.n % 8
         or workload.k % 8
-        or not 90 <= get_sm_version() < 110
+        or not 90 <= device_facts().arch < 110
     ):
         print("  [skip] deepgemm: dense BF16 NT needs SM9x/SM10x, positive N/K and N/K % 8 == 0")
         return None
@@ -294,7 +294,7 @@ def _flashinfer_fp8_per_tensor_unsupported_reason(
 ) -> str | None:
     if device.type != "cuda":
         return f"flashinfer runs on cuda, not {device}"
-    arch = get_sm_version(device.index)
+    arch = device_facts(device.index).arch
     if not 100 <= arch < 110:
         return f"TRTLLM low-latency GEMM requires SM10x, but the current device is sm{arch}"
     if n <= 0 or n % 32 or k <= 0 or k % 128:
@@ -316,7 +316,7 @@ def _quack_gemm_unsupported_reason(workload: GEMMWorkload) -> str | None:
 
 def _marlin_w4a16_unsupported_reason(n: int, k: int, group_size: int) -> str | None:
     """Marlin's positive group sizes and aligned affine INT4 matrix domain."""
-    if get_sm_version() < 80:
+    if device_facts().arch < 80:
         return "Marlin W4A16 requires compute capability at least 80"
     # vLLM marlin_utils.MARLIN_SUPPORTED_GROUP_SIZES, excluding per-channel -1.
     if group_size not in (32, 64, 128):
@@ -416,7 +416,7 @@ def _vllm_w4a8_unsupported_reason(n: int, k: int, group_size: int) -> str | None
     without a tail predicate (``mixed_dtype_utils.hpp::reorder_tensor``). The GEMM also
     requires SM90, group size 128 and N divisible by 128.
     """
-    if get_sm_version() != 90:
+    if device_facts().arch != 90:
         return "CUTLASS W4A8 requires compute capability 90"
     if group_size != 128:
         return f"CUTLASS W4A8 supports group_size 128 only, got {group_size}"

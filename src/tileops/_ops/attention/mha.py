@@ -10,7 +10,6 @@ from tileops._kernels.attention import (
 from tileops._kernels.attention.call_spec import AttentionCall, MHAPagedDecodeFwdInterface
 from tileops._kernels.kernel_base import Kernel, KernelInterface
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = [
@@ -26,6 +25,8 @@ class MHAPagedFwdOp(Op):
     the keys up to position ``i + cache_seqlens - seqlen_q``. A query that sees no key
     outputs zeros. The op takes no ``sm_scale``; scores are scaled by ``dim ** -0.5``.
     """
+
+    contraction_dtype_from = "q"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "mha_decode_paged_kernel": MHADecodePagedKernel,
@@ -56,8 +57,9 @@ class MHAPagedFwdOp(Op):
         """Build the op. Shapes and dtype are taken from each call.
 
         Args:
-            page_size: Manifest ``params.page_size``, ``int``.
-            is_causal: Manifest ``params.is_causal``, ``bool``, default ``False``.
+            page_size: Rows per cache page; a positive multiple of 16 that divides ``N_kv``.
+            is_causal: Align the queries to the end of each request's cache and mask later
+                keys.
             target: Which set of kernels serves this op — a target name, ``BUILTIN``
                 for the in-tree kernels, or ``None`` to decide from the input device.
         """
@@ -97,24 +99,22 @@ class MHAPagedFwdOp(Op):
         block_table: torch.Tensor,
         cache_seqlens: torch.Tensor,
     ) -> torch.Tensor:
-        """Run the op on the inputs the manifest declares.
+        """Attend each request's query tokens to its cache.
 
         Args:
-            q: Input tensor, dtype ``float16 | bfloat16``.
-            k_cache: Input tensor, same dtype as ``q``.
-            v_cache: Input tensor, same dtype as ``q``.
-            block_table: Input tensor, dtype ``int32``.
-            cache_seqlens: Input tensor, dtype ``int32``.
+            q: ``(B, S_q, H, D)`` queries, float16 or bfloat16.
+            k_cache: ``(N_kv, H, D)`` key cache in the query dtype.
+            v_cache: ``(N_kv, H, D)`` value cache in the query dtype.
+            block_table: ``int32`` ``(B, W)``; key ``n`` of request ``b`` is row
+                ``block_table[b, n // page_size] * page_size + n % page_size`` of the cache.
+            cache_seqlens: ``int32`` ``(B,)``, the keys each request holds, at most
+                ``W * page_size``.
 
         Returns:
-            ``o``, as the manifest declares. Shape rules: ``o.shape == (B, S_q, H, D)``.
+            ``o`` ``(B, S_q, H, D)`` in the query dtype.
         """
         inputs = (q, k_cache, v_cache, cache_seqlens, block_table)
         kernel = self.kernel_for(
             "mha_decode_paged", lambda: self._attention_call(q, k_cache, block_table)
         )
         return kernel(*inputs)
-
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])

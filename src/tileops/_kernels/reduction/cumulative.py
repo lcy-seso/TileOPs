@@ -27,7 +27,7 @@ from tileops._kernels.reduction.call_spec import (
 )
 from tileops._kernels.tiling import ALIGNMENT, align_up
 from tileops._kernels.warp_reduce import warp_reduce
-from tileops._utils import WARP_LANES
+from tileops._utils import WARP_LANES, WARP_SHUFFLE_STAGES
 
 __all__ = [
     "CumsumClusterScanKernel",
@@ -152,13 +152,13 @@ def _row_scan_kernel(
     ragged = n_seg * seg_len > N
     # The totals ahead are combined over a fragment, and a fragment's layout gives every
     # thread the same number of its elements.
-    n_ahead = -(-n_seg // threads) * threads
+    n_ahead = align_up(n_seg, threads)
     pad = _row_scan_pad(chunk_len, getattr(torch, dtype).itemsize)
     out_pad = _row_scan_pad(chunk_len, getattr(torch, out_dtype).itemsize)
     vec = _chunk_vec(chunk_len, dtype)
     out_vec = _chunk_vec(chunk_len, out_dtype)
     # Shuffle steps to scan one warp's lanes, and the warps a block holds.
-    n_steps = WARP_LANES.bit_length() - 1
+    n_steps = WARP_SHUFFLE_STAGES
     n_warps = max(threads // WARP_LANES, 1)
     identity, combine = _identity_and_combine(op_kind)
 
@@ -604,7 +604,7 @@ def _cumsum_cluster_scan_kernel(rows: int, width: int, aligned: bool):
     warp_items = WARP_LANES * elements
     chunk = width // blocks
     stripes = chunk // (warps * warp_items)
-    stages = WARP_LANES.bit_length() - 1
+    stages = WARP_SHUFFLE_STAGES
     dtype = "float32"
 
     @tilelang.jit(

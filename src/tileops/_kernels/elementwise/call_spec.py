@@ -29,6 +29,8 @@ __all__ = [
     "ClampTensorCall",
     "ClampTensorFwdInterface",
     "DivCall",
+    "DropoutCall",
+    "DropoutFwdInterface",
     "ELUCall",
     "ELUFwdInterface",
     "ElementwiseCall",
@@ -727,4 +729,50 @@ class SinusoidalFwdInterface(KernelInterface):
         Returns:
             A new contiguous ``(call.seq_len, call.d_model)`` tensor in ``call.dtype`` on
             ``call.device``.
+        """
+
+
+@dataclasses.dataclass(frozen=True)
+class DropoutCall(CallSpec):
+    """One dropout call; the probability is baked into the program, the seed is not."""
+
+    count: int = 0
+    p: float = 0.5
+    dtype: torch.dtype | None = None
+
+
+class DropoutFwdInterface(KernelInterface):
+    """Inverted dropout over a flat run of elements."""
+
+    request = DropoutCall
+    # A call uses at most max(count, MAX_DRAWS_PER_STREAM) draws of one stream: a thread draws
+    # one value per element it holds, so this caps num_per_thread, and the op advances torch's
+    # generator past at least this many.
+    MAX_DRAWS_PER_STREAM = 32
+
+    @abstractmethod
+    def forward(self, x: torch.Tensor, seed: int, offset: int) -> torch.Tensor:
+        """Scale the elements a Bernoulli draw keeps; nothing is written in place.
+
+        Element ``i`` becomes ``x[i] / (1 - call.p)`` where its draw keeps it and zero where
+        it does not. Each element has a draw of its own, independent of every other
+        element's, that drops it with probability ``call.p`` rounded up to a multiple of
+        ``2**-32``. The draws come from the Philox stream ``(seed, offset)`` through the
+        thread layout the built program fixes, so two calls on one built kernel with the
+        same ``seed`` and ``offset`` produce the same mask. An implementation uses at most
+        ``max(call.count, MAX_DRAWS_PER_STREAM)`` consecutive draws of each stream, starting
+        at ``offset``, so a call at an offset that many or more higher uses values this one
+        did not.
+        Nothing is written in place, and the output aliases no input.
+
+        Args:
+            x: The input, ``(call.count,)`` in ``call.dtype`` on ``call.device``,
+                contiguous. The op passes a flat contiguous view of the caller's tensor and
+                restores its shape outside the kernel, so an implementation sees one run of
+                elements and no stride.
+            seed: The Philox seed, a signed 64-bit integer.
+            offset: The Philox offset, a non-negative multiple of 4 below ``2**63``.
+
+        Returns:
+            A new contiguous ``(call.count,)`` tensor in ``call.dtype`` on ``call.device``.
         """

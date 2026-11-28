@@ -9,15 +9,6 @@ import torch
 WARP_LANES: int = 32
 # Butterfly shuffle steps that reduce one warp: log2(WARP_LANES).
 WARP_SHUFFLE_STAGES: int = WARP_LANES.bit_length() - 1
-# CTAs one SM holds at once, by architecture (CUDA C++ Programming Guide, compute capabilities).
-RESIDENT_CTAS: dict[int, int] = {80: 32, 86: 16, 89: 24, 90: 32, 100: 32}
-
-STR_TO_DTYPE = {
-    "float16": torch.float16,
-    "bfloat16": torch.bfloat16,
-    "float32": torch.float32,
-    "int32": torch.int32,
-}
 
 
 def calibration_key(device_name: str) -> "str | None":
@@ -105,35 +96,13 @@ def _device_facts(index: int) -> CudaFacts:
 def device_facts(index: "int | None" = None) -> CudaFacts:
     """The facts of CUDA device *index*; defaults to the current device.
 
-    The one reader of CUDA device facts: call specs, build targets and the helpers below
-    all read through it. The index is resolved before the cache is read, so ``None`` never
+    The one reader of CUDA device facts: call specs, build targets and kernels all read
+    through it. The index is resolved before the cache is read, so ``None`` never
     names whichever device happened to be current on the first call. Raises without a
     device: a stand-in for a fact decides a dispatch the caller cannot tell from a measured
     one.
     """
     return _device_facts(torch.cuda.current_device() if index is None else index)
-
-
-def device_calibration(index: "int | None" = None) -> "str | None":
-    """The ``calibration`` of the device, or ``None`` without CUDA; defaults to current."""
-    if not torch.cuda.is_available():
-        return None
-    return device_facts(index).calibration
-
-
-def get_sm_version(index: "int | None" = None) -> int:
-    """The ``arch`` of the device; defaults to current."""
-    return device_facts(index).arch
-
-
-def get_sm_count(index: "int | None" = None) -> int:
-    """The ``sm_count`` of the device; defaults to current."""
-    return device_facts(index).sm_count
-
-
-def get_shared_memory_optin(index: "int | None" = None) -> int:
-    """The ``smem_budget`` of the device; defaults to current."""
-    return device_facts(index).smem_budget
 
 
 def forget_device_properties() -> None:

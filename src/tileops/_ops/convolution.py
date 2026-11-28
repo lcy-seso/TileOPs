@@ -37,7 +37,6 @@ from tileops._kernels.convolution import (
 from tileops._kernels.kernel_base import Kernel, KernelInterface
 from tileops._ops._spatial import per_axis_values
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = [
@@ -74,6 +73,8 @@ def _out_dim(size: int, kernel: int, stride: int, before: int, after: int, dilat
 class _ConvFwdOp(Op):
     """What the 1-D, 2-D and 3-D convolutions share: construction and pricing."""
 
+    contraction_dtype_from = "T"
+
     def __init__(
         self,
         stride: int | tuple[int, ...] = 1,
@@ -92,17 +93,14 @@ class _ConvFwdOp(Op):
                 after.
             dilation: Dilation, an int or one value per spatial axis (default 1).
             groups: Number of channel groups (default 1).
-            target: Backend target to serve this op, or ``None`` to decide from the input device.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.stride = stride
         self.padding = padding
         self.dilation = dilation
         self.groups = groups
         super().__init__(target=target)
-
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.indices["T"])
 
 
 class Conv1dFwdOp(_ConvFwdOp):

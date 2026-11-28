@@ -9,7 +9,11 @@ import tilelang
 import tilelang.language as T
 import torch
 
-from tileops._kernels.attention.call_spec import AttentionCall, GQADenseFwdInterface
+from tileops._kernels.attention.call_spec import (
+    AttentionCall,
+    GQADenseFwdInterface,
+    check_head_groups,
+)
 from tileops._kernels.attention.gqa.decode import (
     GQADecodeKernel,
     gqa_decode_kernel,
@@ -237,10 +241,7 @@ class GQADecodeBs1Kernel(Kernel, GQADenseFwdInterface):
         self.max_position = max_position
         self.rotary_dim = rotary_dim
         self.rope_layout = rope_layout
-        if self.groups <= 0:
-            raise ValueError("heads_kv must be positive")
-        if self.heads % self.groups != 0:
-            raise ValueError("heads must be divisible by heads_kv")
+        check_head_groups(self.heads, self.groups)
         self.init_config(config)
 
     @property

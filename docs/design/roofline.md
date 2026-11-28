@@ -65,7 +65,7 @@ Beyond the elementwise rule, `total_flops` is the least arithmetic of the algori
 `Op.roof_key()` returns the GPU-profile key (§5.1) of the unit that prices the op's FLOPs — `"cuda_core.fp32"`, `"tensor_core.bf16"`, `"tensor_core.fp8"`, ….
 
 - The key states the unit an **optimal** implementation would use, declared by the op author in code. It is never inferred from the running kernel — that would price a kernel on the wrong unit against the wrong ceiling and hide exactly the gap the metric exists to expose. Nor from the input dtype alone — an fp8-backend attention takes fp16/bf16 tensors.
-- The base default covers every op whose arithmetic runs on CUDA cores in fp32 (elementwise, reductions, norms, scans). An op whose FLOPs are matmul contractions overrides it; one whose unit depends on instance state (a backend switch, a quantized path) branches on that state.
+- The base default covers every op whose arithmetic runs on CUDA cores in fp32 (elementwise, reductions, norms, scans). An op whose FLOPs are matmul contractions names the input tensor or dtype index that holds its contraction dtype, and the base prices it on that dtype's tensor cores; an op whose unit is a fixed dtype or depends on instance state (a backend switch, a quantized path) overrides `roof_key()`.
 - The declaration is valid whenever `eval_roofline()` is — after the op's dtype is bound.
 - A wrong or missing override prices the op against the wrong ceiling. The physics check (§4.3) reports it once the implied rate breaches that ceiling, which a kernel far from its own roof does not reach.
 

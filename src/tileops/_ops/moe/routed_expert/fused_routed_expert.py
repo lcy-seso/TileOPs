@@ -11,7 +11,6 @@ from tileops._ops.moe.contracts import ContiguousLayoutSpec, RoutingEpilogueSpec
 from tileops._ops.moe.routed_expert.indexed_routed_expert import IndexedExpertMLPFwdOp
 from tileops._ops.moe.staged import MoEExpertMLPFwdOp, MoEPostPermuteFwdOp, MoEPrePermuteFwdOp
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = ["FusedMoEExpertsFwdOp"]
@@ -37,6 +36,8 @@ class FusedMoEExpertsFwdOp(Op):
     ``F % 256 == 0`` runs ``IndexedExpertMLPFwdOp``; every other call runs the staged
     pipeline.
     """
+
+    contraction_dtype_from = "D"
 
     delegate_types: ClassVar[Mapping[str, type[Op]]] = {
         "pre_permute": MoEPrePermuteFwdOp,
@@ -90,10 +91,6 @@ class FusedMoEExpertsFwdOp(Op):
         from tileops._perf.formulas import routed_active_experts
 
         return {"active_experts": routed_active_experts(self.last_call)}
-
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.indices["D"])
 
     def forward(
         self,

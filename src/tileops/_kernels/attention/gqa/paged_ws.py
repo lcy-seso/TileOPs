@@ -12,6 +12,7 @@ from tileops._kernels.attention.call_spec import (
     ATTENTION_DTYPES,
     AttentionCall,
     GQAPagedFwdInterface,
+    check_head_groups,
 )
 from tileops._kernels.attention.gqa.paged_rope_prepare import _gqa_paged_rope_prepare_kernel
 from tileops._kernels.attention.online_softmax import make_apply_softcap, make_sink_scale
@@ -904,8 +905,8 @@ class GQAPagedFwdWSKernel(Kernel, GQAPagedFwdInterface):
             return "requires a query of the output dtype or, over an FP8 cache, FP8"
         if call.dim not in cls._DIMS:
             return f"requires head dimension in {cls._DIMS}"
-        if call.heads_kv <= 0 or call.heads % call.heads_kv != 0:
-            return "requires heads a multiple of heads_kv"
+        if not call.whole_head_groups:
+            return "requires heads to be a multiple of heads_kv"
         if cls._flat(call.heads, call.heads_kv) and (
             call.fuse_rope or call.uses_sliding_window or call.has_sinks
         ):
@@ -993,8 +994,7 @@ class GQAPagedFwdWSKernel(Kernel, GQAPagedFwdInterface):
         device_index: int | None = None,
     ) -> None:
         super().__init__(device_index=device_index)
-        if heads_kv <= 0 or heads % heads_kv != 0:
-            raise ValueError("heads must be a positive multiple of heads_kv")
+        check_head_groups(heads, heads_kv)
         self.batch = batch
         self.heads = heads
         self.heads_kv = heads_kv
@@ -1043,130 +1043,18 @@ class GQAPagedFwdWSKernel(Kernel, GQAPagedFwdInterface):
         self.init_config(config)
 
     @property
-    def default_config(self) -> dict:
-        return {}
-
-    @classmethod
-    def build_program(
-        cls,
-        batch: int,
-        heads: int,
-        heads_kv: int,
-        dim: int,
-        page_size: int,
-        max_pages_per_req: int,
-        is_causal: bool,
-        sm_scale: float,
-        softcap: float,
-        dtype: str,
-        sm_count: int,
-        window_size_left: int = -1,
-        window_size_right: int = -1,
-        has_sinks: bool = False,
-        rope_cols: int = 0,
-        rope_rows: int = 0,
-        key_pages: int | None = None,
-        *,
-        q_stride: int | None,
-    ):
-        """The persistent program for one geometry over a table *max_pages_per_req* wide;
-        *key_pages* bounds a request's key pages (the table width by default), and
-        *q_stride* is the elements between two tokens of Q, ``None`` where it is packed."""
-        split_small = cls.splits_small(
-            heads, heads_kv, dim, page_size, key_pages or max_pages_per_req, window_size_left,
-            window_size_right, has_sinks,
-        )  # fmt: skip
-        return _gqa_paged_ws_kernel(
-            batch,
-            heads,
-            heads_kv,
-            dim,
-            page_size,
-            max_pages_per_req,
-            is_causal,
-            sm_scale,
-            softcap,
-            dtype,
-            cls.block_n_for(page_size, dim),
-            cls._STAGES,
-            sm_count,
-            window_size_left,
-            window_size_right,
-            has_sinks,
-            split_small,
-            cls._SPLIT_MIN_TILES,
-            rope_cols,
-            rope_rows,
-            flat=cls._flat(heads, heads_kv),
-            tile_heads=cls._tile_heads(heads, heads_kv),
-            q_stride=q_stride,
-        )
-
-    @classmethod
-    def splits_small(
-        cls,
-        heads: int,
-        heads_kv: int,
-        dim: int,
-        page_size: int,
-        max_pages_per_req: int,
-        window_size_left: int,
-        window_size_right: int,
-        has_sinks: bool,
-    ) -> bool:
+    def split_small(self) -> bool:
         """Whether a request's key tiles split between the warpgroups. Windows, sinks and flat
         rows keep the shared scan; a table too short for _SPLIT_MIN_TILES tiles builds without
         the split and claims requests in reverse."""
         return (
-            not cls._flat(heads, heads_kv)
-            and window_size_left < 0
-            and window_size_right < 0
-            and not has_sinks
-            and max_pages_per_req * page_size
-            >= cls._SPLIT_MIN_TILES * cls.block_n_for(page_size, dim)
+            not self._flat(self.heads, self.heads_kv)
+            and self.window_size_left < 0
+            and self.window_size_right < 0
+            and not self.has_sinks
+            and self._rope_pages * self.page_size
+            >= self._SPLIT_MIN_TILES * self.block_n_for(self.page_size, self.dim)
         )
-
-    @property
-    def split_small(self) -> bool:
-        return self.splits_small(
-            self.heads, self.heads_kv, self.dim, self.page_size, self._rope_pages,
-            self.window_size_left, self.window_size_right, self.has_sinks,
-        )  # fmt: skip
-
-    @classmethod
-    def launch(
-        cls,
-        program,
-        counters: dict,
-        q: torch.Tensor,
-        k_pool: torch.Tensor,
-        v_pool: torch.Tensor,
-        cache_seqlens: torch.Tensor,
-        page_table: torch.Tensor,
-        cu_seqlens_q: torch.Tensor,
-        sinks: torch.Tensor,
-        k_rotated: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Run *program* over the pools, claiming work from the stream's counter in
-        *counters*: a new output of q's shape and dtype. *k_rotated* feeds a rope_cols build."""
-        heads, dim = q.shape[1], q.shape[2]
-        out = q.new_empty(q.shape)
-        if cls._flat(heads, k_pool.shape[1]):
-            q, out = q.view(-1, dim), out.view(-1, dim)
-        rotated = () if k_rotated is None else (k_rotated,)
-        program(
-            q,
-            k_pool,
-            v_pool,
-            *rotated,
-            cache_seqlens,
-            page_table,
-            cu_seqlens_q,
-            out,
-            stream_counter(counters, q.device),
-            sinks,
-        )
-        return out.view(-1, heads, dim)
 
     @property
     def kernel(self):
@@ -1177,7 +1065,7 @@ class GQAPagedFwdWSKernel(Kernel, GQAPagedFwdInterface):
         """The persistent program over Q's tokens *q_stride* elements apart (``None`` where
         they lie back to back), and the RoPE preparation ahead of it or ``None``."""
         # Whole rotated pages replace the cache and its table; rotated leading channels keep both.
-        attention = self.build_program(
+        attention = _gqa_paged_ws_kernel(
             self.batch,
             self.heads,
             self.heads_kv,
@@ -1188,13 +1076,18 @@ class GQAPagedFwdWSKernel(Kernel, GQAPagedFwdInterface):
             self.sm_scale,
             self.softcap,
             self.dtype_str,
+            self.block_n_for(self.page_size, self.dim),
+            self._STAGES,
             self.build_target.sm_count,
             self.window_size_left,
             self.window_size_right,
             self.has_sinks,
+            self.split_small,
+            self._SPLIT_MIN_TILES,
             self._rope_cols,
             self._rope_pages * self.page_size if self._rope_cols else 0,
-            self._rope_pages,
+            flat=self._flat(self.heads, self.heads_kv),
+            tile_heads=self._tile_heads(self.heads, self.heads_kv),
             q_stride=q_stride,
         )
         if not self.fuse_rope:
@@ -1212,8 +1105,8 @@ class GQAPagedFwdWSKernel(Kernel, GQAPagedFwdInterface):
             self.rotary_dim,
             self.rope_layout,
             self.dtype_str,
-            str(self.query_dtype).removeprefix("torch."),
-            str(self.cache_dtype).removeprefix("torch."),
+            self.dtype_to_str(self.query_dtype),
+            self.dtype_to_str(self.cache_dtype),
             self.per_request_kv_scale,
             self._rope_cols or self.dim,
             not self._rope_cols,
@@ -1279,15 +1172,20 @@ class GQAPagedFwdWSKernel(Kernel, GQAPagedFwdInterface):
                 page_table = self._rope_table
         else:
             k_rotated = None
-        return self.launch(
-            attention,
-            self._counters,
+        heads, dim = q.shape[1], q.shape[2]
+        out = q.new_empty(q.shape)
+        if self._flat(self.heads, self.heads_kv):
+            q, out = q.view(-1, dim), out.view(-1, dim)
+        attention(
             q,
             k_pool,
             v_pool,
+            *(() if k_rotated is None else (k_rotated,)),
             cache_seqlens,
             page_table,
             cu_seqlens_q,
+            out,
+            stream_counter(self._counters, q.device),
             sinks if self.has_sinks else self._unused_sinks,
-            k_rotated,
         )
+        return out.view(-1, heads, dim)

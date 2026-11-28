@@ -14,12 +14,12 @@ from tilelang.layout import make_swizzled_layout
 from tileops._kernels.attention.call_spec import (
     ATTENTION_DTYPES,
     MLAVarlenCall,
-    MLAVarlenFwdInterface,
 )
+from tileops._kernels.attention.gqa.paged_ws import claim_work
+from tileops._kernels.attention.mla.prefill_varlen import _MLAVarlenFwdBase
 from tileops._kernels.build_target import CUDA_COMPILE_FLAGS, target_cache
 from tileops._kernels.constants import LOG2E
 from tileops._kernels.grouped_tiling import GroupTiling
-from tileops._kernels.kernel_base import Entry, Kernel
 from tileops._kernels.stream_counter import stream_counter
 
 __all__ = ["MLAVarlenPrefillWSFwdKernel"]
@@ -158,13 +158,6 @@ def _mla_varlen_ws_kernel(
             meta[4] = T.max(1, T.ceildiv(meta[2], block_n))
 
     @T.macro
-    def fetch(Sched, lane, work):
-        """Claim the next work item into work[0]: lane 0 claims, the warp shares it."""
-        if lane == 0:
-            work[0] = T.atomic_add(Sched[0], 1, return_prev=True)
-        work[0] = T.tvm_warp_shuffle(T.uint32(0xFFFFFFFF), work[0], 0, 32, 32)
-
-    @T.macro
     def producer(
         Q, KN, KP, V, CuQ, Sched, QNs, QPs, KNs, KPs, Vs, item_slot, q_bar, qfree, kready,
         kfree, vready, vfree, total, tile_cum, lo, hi, request, q_row, meta, lane,
@@ -173,7 +166,7 @@ def _mla_varlen_ws_kernel(
         issued = T.alloc_var("int32", init=0)
         loaded = T.alloc_var("int32", init=0)
         work = T.alloc_local([1], "int32")
-        fetch(Sched, lane, work)
+        claim_work(Sched, lane, work)
         while work[0] < total:
             locate(work[0], CuQ, tile_cum, lo, hi, request, q_row, meta)
             head = meta[0]
@@ -233,7 +226,7 @@ def _mla_varlen_ws_kernel(
                 T.mbarrier_arrive(vready[s])
             issued += meta[4]
             loaded += 1
-            fetch(Sched, lane, work)
+            claim_work(Sched, lane, work)
         # Stop the consumers, then leave the counters zeroed for the next launch.
         T.mbarrier_wait_parity(qfree[loaded % q_slots], ((loaded // q_slots) % 2) ^ 1)
         item_slot[loaded % q_slots, 5] = -1
@@ -422,7 +415,7 @@ def _mla_varlen_ws_kernel(
     return main
 
 
-class MLAVarlenPrefillWSFwdKernel(Kernel, MLAVarlenFwdInterface):
+class MLAVarlenPrefillWSFwdKernel(_MLAVarlenFwdBase):
     """SM90 warp-specialized packed-varlen MLA prefill.
 
     One persistent CTA per SM, a TMA producer warp, and two consumer warpgroups of
@@ -453,49 +446,10 @@ class MLAVarlenPrefillWSFwdKernel(Kernel, MLAVarlenFwdInterface):
             return f"the per-request prefix is held in shared memory, got batch {call.batch}"
         return super().refusal(call)
 
-    @classmethod
-    def entry_for(cls, call: MLAVarlenCall) -> Entry:
-        args = dict(
-            batch=call.batch,
-            heads=call.heads,
-            dim_nope=call.dim_nope,
-            dim_pe=call.dim_pe,
-            dim_v=call.dim_v,
-            is_causal=call.is_causal,
-            sm_scale=call.sm_scale,
-            dtype=call.dtype,
-            device_index=call.device_index,
-        )
-        return tuple(args.items()), lambda: cls(**args)
-
-    def __init__(
-        self,
-        batch: int,
-        heads: int,
-        dim_nope: int,
-        dim_pe: int,
-        dim_v: int,
-        is_causal: bool,
-        dtype: torch.dtype,
-        sm_scale: float | None = None,
-        config: dict | None = None,
-        *,
-        device_index: int | None = None,
-    ) -> None:
-        """Build the program for one call shape; *config* is unused, the geometry being fixed by
-        the class constants."""
-        super().__init__(device_index=device_index)
-        self.batch = batch
-        self.heads = heads
-        self.dim_nope = dim_nope
-        self.dim_pe = dim_pe
-        self.dim_v = dim_v
-        self.is_causal = is_causal
-        self.dtype = dtype
-        self.sm_scale = sm_scale
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
         # One counter per stream: concurrent launches on one counter steal each other's items.
         self._counters: dict = {}
-        self.init_config(config)
         self.program(self._compile)
 
     def _compile(self, cfg: dict):
@@ -515,10 +469,6 @@ class MLAVarlenPrefillWSFwdKernel(Kernel, MLAVarlenFwdInterface):
             self.build_target.sm_count,
         )
         return kernel
-
-    @property
-    def default_config(self) -> dict:
-        return {}
 
     def forward(
         self,

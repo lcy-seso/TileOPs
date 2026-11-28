@@ -14,7 +14,6 @@ from collections.abc import Callable
 import tilelang
 import tilelang.language as T
 import torch
-from tvm import DataType
 
 from tileops._kernels.build_target import target_cache
 from tileops._kernels.constants import VECTOR_ACCESS_BYTES
@@ -58,7 +57,7 @@ def _group_norm_split_kernel(M, D, eps, dtype, num_groups, channels_per_group, a
     and the three stages' JIT factories."""
     accum_dtype = "float32"
     # The widest access that divides the row, so every row and piece starts on one.
-    vec = math.gcd(D, VECTOR_ACCESS_BYTES // (DataType(dtype).bits // 8))
+    vec = math.gcd(D, VECTOR_ACCESS_BYTES // getattr(torch, dtype).itemsize)
     spatial = D // channels_per_group
     C = num_groups * channels_per_group
 

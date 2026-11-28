@@ -13,12 +13,12 @@ from tileops._kernels.build_target import target_cache
 from tileops._kernels.constants import LOG2E
 from tileops._kernels.grouped_tiling import GroupTiling
 from tileops._kernels.kernel_base import CompiledProgram, Entry, Kernel
+from tileops._kernels.linear_attention.call_spec import build_entry
 from tileops._kernels.linear_attention.chunk_plan import packed_offsets
 from tileops._kernels.linear_attention.gla.call_spec import (
     PASS_CONFIGS,
     GLACall,
     GLAFwdInterface,
-    build_entry,
     extents_refusal,
 )
 from tileops._kernels.linear_attention.gla.varlen_prefill import (
@@ -550,6 +550,8 @@ class GLAVarlenPrefillPartitionedFwdKernel(Kernel, GLAFwdInterface):
         return build_entry(
             cls,
             call,
+            scale=call.scale,
+            dtype=call.dtype,
             batch=call.batch,
             seq_len=call.seq_len,
             num_sequences=call.num_sequences,

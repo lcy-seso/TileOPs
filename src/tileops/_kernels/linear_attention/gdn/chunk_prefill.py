@@ -23,10 +23,6 @@ class GDNChunkPrefillFwdKernel(Kernel, GDNFwdInterface):
             or super().refusal(call)
         )
 
-    @classmethod
-    def entry_for(cls, call):
-        return call, lambda: cls(call)
-
     def __init__(self, call):
         super().__init__(device_index=call.device_index)
         self.call = call

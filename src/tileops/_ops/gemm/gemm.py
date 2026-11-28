@@ -80,6 +80,8 @@ class GEMMFwdOp(Op):
     standard normal operands).
     """
 
+    contraction_dtype_from = "T"
+
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "gemm_tma": GEMMTMAKernel,
         "gemm_cp_async": GEMMCpAsyncKernel,
@@ -153,9 +155,6 @@ class GEMMFwdOp(Op):
 
         return self.kernel_for("gemm", call)(*inputs)
 
-    def roof_key(self) -> str:
-        return tensor_core_roof(self.last_call.indices["T"])
-
 
 class GEMMFP8FwdOp(Op):
     """Dense FP8 NT GEMM, input-inferred: $d = (a \\cdot s_a) \\mathbin{@} (b \\cdot s_b)^{\\top} + \\text{bias}$.
@@ -166,6 +165,8 @@ class GEMMFP8FwdOp(Op):
     block, $[N \\times \\lceil K/128 \\rceil]$, or per 128x128 block, $[\\lceil N/128 \\rceil
     \\times \\lceil K/128 \\rceil]$.
     """
+
+    contraction_dtype_from = "T"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "gemm_fp8_tensor_scale": GEMMFP8TensorScaleKernel,
@@ -240,9 +241,6 @@ class GEMMFP8FwdOp(Op):
             ),
         )
         return kernel(a, b, a_scale, b_scale, bias)
-
-    def roof_key(self) -> str:
-        return tensor_core_roof(self.last_call.indices["T"])
 
 
 class GEMMINT8W8A8FwdOp(Op):
@@ -349,6 +347,8 @@ class GEMMW4A16FwdOp(Op):
     The output is ``activation @ W.T`` with shape ``[M, N]``. The in-tree kernel serves
     ``group_size = 128`` only and refuses any other value when it is built.
     """
+
+    contraction_dtype_from = "T"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "gemm_w4a16": GEMMW4A16Kernel,
@@ -457,9 +457,6 @@ class GEMMW4A16FwdOp(Op):
             ),
         )
         return kernel(*inputs)
-
-    def roof_key(self) -> str:
-        return tensor_core_roof(self.last_call.indices["T"])
 
 
 class GEMMW4A8FwdOp(Op):

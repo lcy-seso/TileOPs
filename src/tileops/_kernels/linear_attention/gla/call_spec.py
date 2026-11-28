@@ -8,14 +8,13 @@ import tilelang
 import torch
 
 from tileops._kernels.call_spec import CallSpec
-from tileops._kernels.kernel_base import Entry, KernelInterface
+from tileops._kernels.kernel_base import KernelInterface
 from tileops._kernels.linear_attention.call_spec import head_count_refusal
 
 __all__ = [
     "PASS_CONFIGS",
     "GLACall",
     "GLAFwdInterface",
-    "build_entry",
     "dense_refusal",
     "extents_refusal",
 ]
@@ -99,10 +98,3 @@ def extents_refusal(call: GLACall) -> str | None:
     if call.dtype not in (torch.float16, torch.bfloat16):
         return f"requires float16 or bfloat16, got {call.dtype}"
     return None
-
-
-def build_entry(cls: type, call: GLACall, **build_arguments: int | bool) -> Entry:
-    """Build *cls* from the call's scale, dtype and device plus the *build_arguments* it compiles."""
-    device_index = call.device_index
-    arguments = dict(build_arguments, scale=call.scale, dtype=call.dtype, device_index=device_index)
-    return tuple(sorted(arguments.items(), key=lambda item: item[0])), lambda: cls(**arguments)

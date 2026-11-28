@@ -701,23 +701,9 @@ class MoEGroupedGEMMFP8Kernel(GroupedGEMMConfigMixin, Kernel, MGroupedGEMMFP8Fwd
             return grid
         return self.sm_count
 
-    def _refusal_inputs(self) -> dict:
-        return {
-            "sm_count": self.sm_count,
-            "smem_limit": self.smem_limit,
-            "scale_k": self.scale_k,
-            "alignment": self.alignment,
-        }
-
-    def _stages_for(self, block_m: int, block_n: int, stage_scales: int) -> list[int]:
-        """Ring depths that fit beside the tiles, those dividing the K steps when any do."""
-        fitting = [
-            s
-            for s in self._NUM_STAGES
-            if _smem_bytes(block_m, block_n, s, stage_scales, self.scale_k) <= self.smem_limit
-        ]
-        dividing = [s for s in fitting if self.scale_k % s == 0]
-        return dividing or fitting
+    def _footprint(self, block_m: int, block_n: int, stage_scales: int) -> Callable[[int], int]:
+        """The shared memory of a ``block_m`` by ``block_n`` tile, by ring depth."""
+        return lambda stages: _smem_bytes(block_m, block_n, stages, stage_scales, self.scale_k)
 
     @property
     def default_config(self) -> dict:
@@ -735,7 +721,7 @@ class MoEGroupedGEMMFP8Kernel(GroupedGEMMConfigMixin, Kernel, MGroupedGEMMFP8Fwd
         return {
             "block_m": block_m,
             "block_n": block_n,
-            "num_stages": max(self._stages_for(block_m, block_n, 0)),
+            "num_stages": max(self._stages_for(self._footprint(block_m, block_n, 0))),
             "num_sms": self._balanced_sms(block_m, block_n),
             "stage_scales": 0,
         }
@@ -751,12 +737,10 @@ class MoEGroupedGEMMFP8Kernel(GroupedGEMMConfigMixin, Kernel, MGroupedGEMMFP8Fwd
         configs = [
             {"block_m": m, "block_n": n, "num_stages": s, "num_sms": sms, "stage_scales": staged}
             for m, n, staged in itertools.product(heights, widths, (0, 1))
-            for s in self._stages_for(m, n, staged)
+            for s in self._stages_for(self._footprint(m, n, staged))
             for sms in sorted({fewest(m, n), self.sm_count})
         ]
-        for config in configs:
-            self._check_config(config)
-        return configs
+        return self._legal(configs)
 
     def _tuning_operands(self, rows: tuple, device) -> list:
         call, fp8 = self.call, torch.float8_e4m3fn

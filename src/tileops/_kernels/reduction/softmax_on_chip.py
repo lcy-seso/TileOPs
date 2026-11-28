@@ -14,7 +14,7 @@ import operator
 
 import tilelang
 import tilelang.language as T
-from tvm import DataType
+import torch
 
 from tileops._csrc import csrc_include
 from tileops._kernels.build_target import target_cache
@@ -28,6 +28,7 @@ from tileops._kernels.reduction._primitives import (
 from tileops._kernels.reduction.call_spec import SoftmaxCall
 from tileops._kernels.reduction.softmax import _PlannedSoftmaxKernel
 from tileops._kernels.streaming_load import load16
+from tileops._kernels.tiling import align_up
 from tileops._kernels.warp_reduce import warp_reduce
 from tileops._utils import WARP_LANES, WARP_SHUFFLE_STAGES
 
@@ -44,7 +45,7 @@ def _softmax_on_chip_kernel(
     registers, the rest staged in shared memory.
     The buffers are viewed as ``(M * cluster, N // cluster)``, one CTA a row of the view.
     """
-    vec = VECTOR_ACCESS_BYTES // (DataType(dtype).bits // 8)
+    vec = VECTOR_ACCESS_BYTES // getattr(torch, dtype).itemsize
     chunk = N // cluster
     held = threads * held_vectors * vec
     staged = chunk - held
@@ -62,7 +63,7 @@ def _softmax_on_chip_kernel(
     # a rescaling, which runs faster on SM90 for every 16-bit plan. An fp32 row folds the
     # warp's (max, sum) pairs after its terms: the maximum taken first runs slower for two
     # of its plans.
-    max_first = DataType(dtype).bits == 16
+    max_first = getattr(torch, dtype).itemsize == 2
 
     @tilelang.jit(
         out_idx=[1],
@@ -303,7 +304,7 @@ def _softmax_cluster_split_kernel(M, N, dtype, out_dtype, cluster, threads, min_
 
     ``min_blocks`` is the CTAs each SM must keep resident, or 0 for no bound.
     """
-    vec = VECTOR_ACCESS_BYTES // (DataType(dtype).bits // 8)
+    vec = VECTOR_ACCESS_BYTES // getattr(torch, dtype).itemsize
     chunk = N // cluster
     chunk_vectors = chunk // vec
     vectors = -(-chunk_vectors // threads)
@@ -539,7 +540,7 @@ class SoftmaxClusterSplitKernel(_PlannedSoftmaxKernel):
                 return None
             chunk_vectors = call.n // (cluster * vec)
             threads = -(-chunk_vectors // vectors_per_thread)
-            return cluster, -(-threads // WARP_LANES) * WARP_LANES, 0
+            return cluster, align_up(threads, WARP_LANES), 0
         # Many rows hold each share in registers and keep every element's fp32 term, so
         # an element is exponentiated once. A 16-bit row at the DRAM rate asks for an
         # exponential every two bytes, twice an fp32 row's rate, which is where a second

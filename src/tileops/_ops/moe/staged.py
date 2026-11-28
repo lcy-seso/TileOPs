@@ -27,7 +27,6 @@ from tileops._ops.moe.contracts import (
     layout_call_fields,
 )
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 
 __all__ = [
     "MoEExpertMLPFwdOp",
@@ -83,8 +82,8 @@ class MoEPrePermuteFwdOp(Op):
         Args:
             layout: How the expert rows are materialized.
             num_local_experts: Number of local experts the ids index.
-            target: Which backend serves this instance; detected from the tensors when
-                ``None``.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.layout = layout
         self.num_local_experts = num_local_experts
@@ -159,6 +158,8 @@ class MoEGroupedGEMMFwdOp(MoELayoutRowsRoofline, Op):
     doing so would synchronise.
     """
 
+    contraction_dtype_from = "D"
+
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "grouped_gemm": MoEGroupedGEMMKernel,
         "grouped_gemm_mma": MoEGroupedGEMMMMAKernel,
@@ -185,17 +186,13 @@ class MoEGroupedGEMMFwdOp(MoELayoutRowsRoofline, Op):
                 interleaved one.
             out_dtype: ``None`` writes the operand dtype, ``torch.float32`` keeps the
                 fp32 accumulator.
-            target: Which backend serves this instance; detected from the tensors when
-                ``None``.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.layout = layout
         self.activation = activation
         self.out_dtype = out_dtype
         super().__init__(target=target)
-
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.indices["D"])
 
     def forward(
         self,
@@ -258,6 +255,8 @@ class MoEExpertMLPFwdOp(MoELayoutRowsRoofline, Op):
     product before its cast.
     """
 
+    contraction_dtype_from = "D"
+
     delegate_types: ClassVar[Mapping[str, type[Op]]] = {
         "gate_up": MoEGroupedGEMMFwdOp,
         "down": MoEGroupedGEMMFwdOp,
@@ -291,10 +290,6 @@ class MoEExpertMLPFwdOp(MoELayoutRowsRoofline, Op):
 
     def _down(self) -> Op:
         return self.delegate_for("down", None, layout=self.layout)
-
-    def roof_key(self) -> str:
-        """The two GEMMs dominate the FLOPs; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.indices["D"])
 
     def forward(
         self,
@@ -363,8 +358,8 @@ class MoEPostPermuteFwdOp(Op):
             epilogue: The routing epilogue; ``None`` takes the default one.
             out_dtype: The dtype the reduced result is written in; ``None`` keeps the
                 expert output's own.
-            target: Which backend serves this instance; detected from the tensors when
-                ``None``.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.layout = layout
         self.epilogue = epilogue

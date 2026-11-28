@@ -11,6 +11,7 @@ import torch
 from tileops._kernels.attention.call_spec import (
     AttentionCall,
     GQAPagedFwdInterface,
+    check_head_groups,
 )
 from tileops._kernels.attention.gqa.decode_bs1_common import (
     COMPILE_FLAGS,
@@ -204,10 +205,7 @@ class GQADecodePagedBs1Kernel(Kernel, GQAPagedFwdInterface):
         self.max_pages_per_req = max_pages_per_req
         self.dtype = dtype
         self.sm_scale = dim**-0.5 if sm_scale is None else sm_scale
-        if self.groups <= 0:
-            raise ValueError("groups must be positive")
-        if self.heads % self.groups != 0:
-            raise ValueError("heads must be divisible by groups")
+        check_head_groups(self.heads, self.groups)
         if self.seqlen_kv <= 0:
             raise ValueError("seqlen_kv must be positive")
         if self.page_size <= 0 or self.seqlen_kv % self.page_size != 0:

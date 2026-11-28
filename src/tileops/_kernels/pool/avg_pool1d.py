@@ -22,82 +22,37 @@ from tileops._kernels.pool.common import (
 __all__ = ["AvgPool1dKernel"]
 
 
-class _WindowStaging:
-    """What one block stages, and the launch shapes worth offering for it."""
+def _span(window: AvgPoolWindow, dtype: str, tile_outputs: int) -> WindowSpan:
+    """What one block of ``tile_outputs`` outputs stages."""
+    (l_in,), (kernel_l,), (stride_l,), (pad_l,) = (
+        window.size,
+        window.kernel,
+        window.stride,
+        window.pad,
+    )
+    return window_span(
+        tile_outputs, tile_outputs * stride_l, l_in, kernel_l, stride_l, pad_l, 1, dtype
+    )
 
-    # Tile widths a launch may take, widest first. The tail below 128 is for a window
-    # too wide to stage at 128 outputs.
-    _TILE_CHOICES: ClassVar[tuple[int, ...]] = (2048, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2, 1)
-    # Outputs a block covers before the shared budget or the output row narrows it.
-    _TILE_OUTPUTS: ClassVar[int] = 512
-    _THREAD_CHOICES: ClassVar[tuple[int, ...]] = (64, 128, 256)
-    # Taken when every block size is ruled out.
-    _FALLBACK_THREADS: ClassVar[int] = 128
-    # Threads a launch needs before a narrow block is offered; under this the blocks
-    # do not fill the device.
-    _MIN_LAUNCH_THREADS: ClassVar[int] = 1 << 16
 
-    def __init__(self, window: AvgPoolWindow, dtype: str) -> None:
-        self._window = window
-        self._dtype = dtype
-        self._out_l = window.out[0]
-        self._kernel_l = window.kernel[0]
-
-    def _span(self, tile_outputs: int) -> WindowSpan:
-        window = self._window
-        (l_in,), (kernel_l,), (stride_l,), (pad_l,) = (
-            window.size,
-            window.kernel,
-            window.stride,
-            window.pad,
+def _tile_width(window: AvgPoolWindow, dtype: str) -> int:
+    """The outputs one block covers: the widest power of two, at most 512 and at most the
+    output row, whose staged span fits the static shared budget."""
+    itemsize = getattr(torch, dtype).itemsize
+    budget = STATIC_SHARED_BYTES // itemsize
+    single = _span(window, dtype, 1).span
+    if single > budget:
+        raise ValueError(
+            f"avg_pool1d stages the pooling window in shared memory: kernel_size="
+            f"{window.kernel[0]} needs {single * itemsize} B for a single output, over the "
+            f"{STATIC_SHARED_BYTES} B a block gets"
         )
-        return window_span(
-            tile_outputs,
-            tile_outputs * stride_l,
-            l_in,
-            kernel_l,
-            stride_l,
-            pad_l,
-            1,
-            self._dtype,
-        )
-
-    def widths(self) -> list[int]:
-        """The tile widths whose span fits the static shared budget, widest first."""
-        budget = STATIC_SHARED_BYTES // getattr(torch, self._dtype).itemsize
-        fitting = [width for width in self._TILE_CHOICES if self._span(width).span <= budget]
-        if not fitting:
-            need = self._span(1).span * getattr(torch, self._dtype).itemsize
-            raise ValueError(
-                f"avg_pool1d stages the pooling window in shared memory: kernel_size="
-                f"{self._kernel_l} needs {need} B for a single output, over the "
-                f"{STATIC_SHARED_BYTES} B a block gets"
-            )
-        return fitting
-
-    def width(self) -> int:
-        """``_TILE_OUTPUTS``, narrowed to the shared budget and to the output row."""
-        fitting = self.widths()
-        wanted = min(self._TILE_OUTPUTS, max(self._out_l, fitting[-1]))
-        return next(width for width in fitting if width <= wanted)
-
-    def default(self) -> dict:
-        return {"block_ol": self.width(), "threads": self._FALLBACK_THREADS}
-
-    def tuned(self) -> list[dict]:
-        """Block sizes worth timing at the chosen width, which is not itself a candidate.
-
-        A block with more threads than the staging pass has loads idles them on the read
-        this kernel is bound by.
-        """
-        width = self.width()
-        vectors = self._span(width).vectors
-        blocks = self._window.rows * ((self._out_l + width - 1) // width)
-        return [
-            {"block_ol": width, "threads": threads}
-            for threads in self._THREAD_CHOICES
-            if vectors >= threads and blocks * threads >= self._MIN_LAUNCH_THREADS
-        ] or [{"block_ol": width, "threads": self._FALLBACK_THREADS}]
+    # The widths below 128 serve a window too wide to stage at 128 outputs.
+    return next(
+        width
+        for width in (512, 256, 128, 64, 32, 16, 8, 4, 2, 1)
+        if width <= max(window.out[0], 1) and _span(window, dtype, width).span <= budget
+    )
 
 
 @target_cache(maxsize=32)
@@ -273,10 +228,26 @@ class AvgPool1dKernel(AvgPoolKernelBase, AvgPool1dFwdInterface):
                 return "serves no output row of 2**31 elements or more from a shorter input row"
         return super().refusal(call)
 
+    # Threads a block takes by default, and wherever no other block size is offered.
+    _THREADS: ClassVar[int] = 128
+
     @property
     def default_config(self) -> dict:
-        return _WindowStaging(self.window, self.dtype_str).default()
+        return {"block_ol": _tile_width(self.window, self.dtype_str), "threads": self._THREADS}
 
     @property
     def autotune_configs(self) -> list[dict]:
-        return _WindowStaging(self.window, self.dtype_str).tuned()
+        """Block sizes worth timing at the default width; the width itself is not tuned.
+
+        A block with more threads than the staging pass has loads idles them on the read
+        this kernel is bound by; under 2**16 threads a launch of narrow blocks does not fill
+        the device.
+        """
+        width = _tile_width(self.window, self.dtype_str)
+        vectors = _span(self.window, self.dtype_str, width).vectors
+        blocks = self.window.rows * ((self.window.out[0] + width - 1) // width)
+        return [
+            {"block_ol": width, "threads": threads}
+            for threads in (64, 128, 256)
+            if vectors >= threads and blocks * threads >= 1 << 16
+        ] or [{"block_ol": width, "threads": self._THREADS}]

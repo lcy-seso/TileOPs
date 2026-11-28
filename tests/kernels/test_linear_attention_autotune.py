@@ -557,7 +557,7 @@ def test_gla_chunked_default_names_the_keys_its_search_space_tunes() -> None:
 
     kernel = object.__new__(GLAChunkFwdKernel)
     kernel.dim_v = 128
-    default = GLAChunkFwdKernel._default_config_for(227 * 1024, 64, 128, 128, 2)
+    default = kernel.default_config
 
     assert {tuple(sorted(config)) for config in kernel.autotune_configs} == {tuple(sorted(default))}
 
@@ -569,3 +569,26 @@ def test_partitioned_gla_offers_no_search_space_it_cannot_build() -> None:
     )
 
     assert object.__new__(GLADensePrefillPartitionedKernel).autotune_configs is None
+
+
+def test_step_decode_kernels_keep_their_interface_forward_names() -> None:
+    """The op may pass the step's tensors by keyword, so each kernel's ``forward`` takes the
+    names its interface declares."""
+    from tileops._kernels.linear_attention import deltanet, gla
+    from tileops._kernels.linear_attention.call_spec import (
+        DeltaNetDecodeFwdInterface,
+        GLADecodeFwdInterface,
+    )
+
+    def names(method) -> list[str]:
+        return list(inspect.signature(method).parameters)
+
+    for kernel, interface in (
+        (deltanet.DeltaNetDecodeKernel, DeltaNetDecodeFwdInterface),
+        (deltanet.DeltaNetDecodeWarpKernel, DeltaNetDecodeFwdInterface),
+        (deltanet.DeltaNetDecodeFP32Kernel, DeltaNetDecodeFwdInterface),
+        (deltanet.DeltaNetDecodeColumnKernel, DeltaNetDecodeFwdInterface),
+        (gla.GLADecodeKernel, GLADecodeFwdInterface),
+        (gla.GLADecodeFP32Kernel, GLADecodeFwdInterface),
+    ):
+        assert names(kernel.forward) == names(interface.forward), kernel.__name__

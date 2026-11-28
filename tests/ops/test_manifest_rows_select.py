@@ -15,9 +15,8 @@ from tests.manifest_calls import implemented_ops
 from tileops._kernels.call_spec import CallSpec
 from tileops._ops.op_base import Op
 from tileops.backend import OpNotAvailableError
-from tileops.manifest import load_adts, load_manifest
+from tileops.manifest import load_adts, load_manifest, op_class
 from tileops.manifest._plan import entry_plan
-from tileops.manifest._registry import op_class
 from tileops.manifest._workload import instantiate
 from workloads.device import run_device
 

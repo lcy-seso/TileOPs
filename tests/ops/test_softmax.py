@@ -15,7 +15,7 @@ from tileops._kernels.reduction.call_spec import SoftmaxCall
 from tileops._kernels.reduction.softmax_on_chip import SoftmaxClusterSplitKernel
 from tileops._kernels.tiling import ALIGNMENT
 from tileops._ops.reduction.softmax import LogSoftmaxFwdOp, LogSumExpFwdOp, SoftmaxFwdOp
-from tileops._utils import get_shared_memory_optin, get_sm_count
+from tileops._utils import device_facts
 from workloads.device import run_device, run_device_available
 from workloads.numerics import compare_outputs
 from workloads.reduction import (
@@ -377,8 +377,8 @@ def test_logsumexp_few_long_rows_split_across_blocks() -> None:
 def test_log_softmax_widest_one_tile_row() -> None:
     """The widest fp32 row shared memory holds, at rows enough to fill the grid, where a one
     tile log_softmax would stage it beside the scratch of its reductions."""
-    n = get_shared_memory_optin() // 4 // ALIGNMENT * ALIGNMENT
-    x = torch.randn(2 * get_sm_count(), n, dtype=torch.float32, device=run_device())
+    n = device_facts().smem_budget // 4 // ALIGNMENT * ALIGNMENT
+    x = torch.randn(2 * device_facts().sm_count, n, dtype=torch.float32, device=run_device())
     compare_outputs(
         LogSoftmaxFwdOp(dim=-1)(x),
         F.log_softmax(x, dim=-1),

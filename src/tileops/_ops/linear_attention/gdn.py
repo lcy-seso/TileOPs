@@ -14,7 +14,6 @@ from tileops._kernels.linear_attention import (
     GDNSplitPrefillFwdKernel,
 )
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = ["GDNFwdOp"]
@@ -62,6 +61,8 @@ class GDNFwdOp(Op):
     undefined. Other calls need an external target implementation.
     """
 
+    contraction_dtype_from = "q"
+
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "gdn_dense_decode": GDNDenseDecodeFwdKernel,
         "gdn_column_decode": GDNColumnDecodeKernel,
@@ -104,8 +105,8 @@ class GDNFwdOp(Op):
                 and that ``state_indices`` and ``num_accepted_tokens`` lie in their manifest
                 ranges.
                 It synchronizes the device; leave it off under CUDA Graph capture.
-            target: Backend target, or ``None`` to resolve from the input
-                device.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.scale = scale
         self.use_qk_l2norm_in_kernel = use_qk_l2norm_in_kernel
@@ -115,10 +116,6 @@ class GDNFwdOp(Op):
         self.use_gate_in_kernel = use_gate_in_kernel
         self.validate_inputs = validate_inputs
         super().__init__(target=target)
-
-    def roof_key(self) -> str:
-        """The state contractions are priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])
 
     def forward(
         self,

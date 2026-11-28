@@ -33,8 +33,10 @@ from tileops._kernels.linear_attention.deltanet.autotune import (
     delta_rule_fwd_autotune_configs,
     h_block_v_candidates,
     tune_delta_rule_fwd,
+    tune_program,
 )
 from tileops._kernels.linear_attention.deltanet.chunk_bwd import (
+    chunk_entry,
     extent_refusal,
     walk_block_v_options,
     walk_threads,
@@ -363,19 +365,7 @@ class DeltaNetChunkFwdKernel(Kernel, DeltaNetChunkFwdInterface):
 
     @classmethod
     def entry_for(cls, call: DeltaNetChunkCall) -> Entry:
-        """The device index is in the identity because the kernel compiles for the
-        architecture it is built on."""
-        arguments = (
-            call.batch,
-            call.heads,
-            call.seq_len,
-            call.chunk_size,
-            call.dim_k,
-            call.dim_v,
-            cls.dtype_to_str(call.dtype),
-        )
-        index = call.device_index
-        return (*arguments, index), lambda: cls(*arguments, device_index=index)
+        return chunk_entry(cls, call)
 
     def __init__(
         self,
@@ -533,7 +523,6 @@ class DeltaNetChunkFwdKernel(Kernel, DeltaNetChunkFwdInterface):
                 )
             )
             return
-        from tileops._kernels.autotune import autotune as tl_autotune
 
         shape = self._shape
         default = self.default_config
@@ -542,12 +531,7 @@ class DeltaNetChunkFwdKernel(Kernel, DeltaNetChunkFwdInterface):
         )
 
         def tune(jit, configs, untuned):
-            configs = self.tuning_candidates(configs, untuned)
-            at = dict(configs=configs, warmup=warmup, rep=rep)
-            dns = list(self._autotune_initial_kwargs(jit, configs[0]).keys())
-            if dns:
-                at["do_not_specialize"] = dns
-            return self._call_autotuned_kernel(tl_autotune(**at)(jit), jit, configs[0]).config
+            return tune_program(self, jit, configs, untuned, warmup, rep)
 
         fused = tune(
             fused_builder(*shape),

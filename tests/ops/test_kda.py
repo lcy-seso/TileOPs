@@ -22,7 +22,7 @@ from tileops._kernels.linear_attention.chunk_prefill import run_chunk_prefill
 from tileops._kernels.linear_attention.kda import chunk_programs, prepare_split
 from tileops._kernels.linear_attention.kda import prefill as kda_prefill
 from tileops._kernels.linear_attention.kda.prepare_split import split_prepare_program
-from tileops._utils.utils import get_sm_count
+from tileops._utils.utils import device_facts
 from tileops.backend import OpNotAvailableError
 from tileops.linear_attention import KDAFwdOp
 from workloads.linear_attention.kda import KDAFwdCall, KDAFwdWorkload
@@ -940,7 +940,7 @@ def test_kda_prefill_given_gate_drops_inside_its_blocks(dim, l2norm, heads, peri
 def test_kda_prefill_strong_decay_sequence_among_ordinary_sequences(packed):
     """One strongly decayed sequence leaves ordinary sequences unchanged."""
     heads = 32
-    sm_count = get_sm_count()
+    sm_count = device_facts().sm_count
     sequences = max(4, -(-sm_count // heads))
     length = 6144
     torch.manual_seed(42)
@@ -1029,7 +1029,7 @@ _FUSED_ARCHS = [
 def _one_wave_heads(sequences: int) -> int:
     """Value heads, a multiple of four, that give *sequences* sequences as many (sequence,
     value head) pairs as the device has SMs, rounded down."""
-    return 4 * (get_sm_count() // (4 * sequences))
+    return 4 * (device_facts().sm_count // (4 * sequences))
 
 
 @pytest.mark.smoke
@@ -1376,7 +1376,7 @@ def test_kda_long_prefill_walks_a_value_major_pool() -> None:
     """A long value-major pooled prefill with one strongly decayed chunk."""
     torch.manual_seed(42)
     heads = 32
-    sequences = max(4, -(-get_sm_count() // heads))
+    sequences = max(4, -(-device_facts().sm_count // heads))
     length = 6144
     flags = {"state_v_first": True, "use_qk_l2norm_in_kernel": True}
     call = manifest_call(

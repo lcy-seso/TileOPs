@@ -14,7 +14,6 @@ from tileops._kernels.elementwise.call_spec import (
 )
 from tileops._kernels.kernel_base import Kernel, KernelInterface
 from tileops._ops.op_base import Op
-from tileops.backend import Target
 
 # The interface of each form of the bounds.
 _NUMBER_BOUNDS, _TENSOR_BOUNDS = "number_bounds", "tensor_bounds"
@@ -40,19 +39,6 @@ class ClampFwdOp(Op):
         _NUMBER_BOUNDS: BoundedUnaryFwdInterface,
         _TENSOR_BOUNDS: ClampTensorFwdInterface,
     }
-
-    def __init__(
-        self,
-        *,
-        target: Target = None,
-    ):
-        """Build the op. Shapes and dtype are taken from the first call.
-
-        Args:
-            target: Which set of kernels serves this op — a target name, ``BUILTIN`` for
-                the in-tree kernels, or ``None`` to decide from the input device.
-        """
-        super().__init__(target=target)
 
     def forward(
         self,

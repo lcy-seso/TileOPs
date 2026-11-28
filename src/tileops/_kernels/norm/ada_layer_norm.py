@@ -44,7 +44,7 @@ def _ada_layer_norm_kernel(M, N, eps, dtype, has_gate, use_cp_async):
     needs_pad = N_padded != N
     # The async policy guarantees that each source row is a whole number of
     # 4-byte cp.async transactions.
-    async_copy_elems = 1 if dtype == "float32" else 2
+    async_copy_elems = 4 // getattr(torch, dtype).itemsize
 
     @tilelang.jit(out_idx=[4] if has_gate else [3])
     def _func(block_m, threads):

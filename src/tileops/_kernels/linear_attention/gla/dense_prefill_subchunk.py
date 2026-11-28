@@ -7,10 +7,10 @@ import torch
 from tileops._kernels.build_target import target_cache
 from tileops._kernels.constants import BF16_SPLIT_EXP2_SPAN, LOG2E
 from tileops._kernels.kernel_base import CompiledProgram, Entry
+from tileops._kernels.linear_attention.call_spec import build_entry
 from tileops._kernels.linear_attention.gla.call_spec import (
     GLACall,
     GLAFwdInterface,
-    build_entry,
     dense_refusal,
 )
 from tileops._kernels.linear_attention.gla.chunk_fwd import (
@@ -252,6 +252,8 @@ class GLADensePrefillSubchunkKernel(GLAChunkedFwdKernel, GLAFwdInterface):
         return build_entry(
             cls,
             call,
+            scale=call.scale,
+            dtype=call.dtype,
             batch=call.batch,
             seq_len=call.seq_len,
             heads=call.heads,

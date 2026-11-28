@@ -8,7 +8,6 @@ import torch
 from tileops._ops.moe.fused_topk import FusedTopKFwdOp
 from tileops._ops.moe.routed_expert import FusedMoEExpertsFwdOp
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = ["FusedMoE", "FusedMoEFwdOp"]
@@ -17,6 +16,8 @@ __all__ = ["FusedMoE", "FusedMoEFwdOp"]
 class FusedMoE(Op):
     """Routing (``FusedTopKFwdOp``) then experts (``FusedMoEExpertsFwdOp``), shared by
     ``FusedMoEFwdOp`` and ``FusedMoESharedExpertFwdOp``."""
+
+    contraction_dtype_from = "D"
 
     delegate_types: ClassVar[Mapping[str, type[Op]]] = {
         "route_select": FusedTopKFwdOp,
@@ -90,10 +91,6 @@ class FusedMoE(Op):
 
         return {"active_experts": fused_moe_active_experts(self.last_call)}
 
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.indices["D"])
-
     def _routed(
         self,
         hidden_states: torch.Tensor,
@@ -165,7 +162,6 @@ class FusedMoEFwdOp(FusedMoE):
                 interleaved one.
             target: Which set of kernels serves this op — a target name, ``BUILTIN``
                 for the in-tree kernels, or ``None`` to decide from the input device.
-                The sub-ops it builds are given the same one.
             experts: A configured ``FusedMoEExpertsFwdOp`` to run the experts; ``None``
                 builds one from ``activation`` and ``routed_scaling_factor``.
         """

@@ -19,7 +19,7 @@ from tileops._kernels.autotune import autotune
 from tileops._kernels.build_target import BuildTarget, building_on, target_cache, target_of
 from tileops._kernels.call_spec import CallSpec
 from tileops._kernels.kernel_base import Kernel
-from tileops._utils import device_calibration, get_shared_memory_optin, get_sm_count, get_sm_version
+from tileops._utils import device_facts
 from tileops.backend import DeviceFacts, _dispatch
 
 # The code of every function ``target_cache`` returns.
@@ -212,8 +212,8 @@ class _FactReader(Kernel):
 @pytest.mark.cuda_only("cuda-kernel")
 @pytest.mark.smoke
 def test_substituting_the_one_reader_reaches_every_device_fact():
-    """Call specs, build targets, a kernel's build target and the helpers all read the CUDA
-    reader that ``described`` substitutes, and nothing else."""
+    """Call specs, build targets and a kernel's build target all read the CUDA reader that
+    ``described`` substitutes, and nothing else."""
     index = torch.accelerator.current_device_index()
     device = torch.device("cuda", index)
     stated = {
@@ -232,8 +232,6 @@ def test_substituting_the_one_reader_reaches_every_device_fact():
             assert getattr(call, name) == value, name
             assert getattr(target, name) == value, name
             assert getattr(kernel.build_target, name) == value, name
-        helpers = (get_sm_version, get_sm_count, get_shared_memory_optin, device_calibration)
-        assert [read(index) for read in helpers] == [89, 7, 101376, None]
 
 
 @pytest.mark.cuda_only("cuda-kernel")
@@ -243,7 +241,7 @@ def test_a_kernel_reads_the_facts_of_the_device_it_is_built_for(two_devices):
     facts; one constructed without an index, and a call spec without a device, read the
     current one."""
     with described({1: {"sm_count": 7}}), torch.accelerator.device_index(0):
-        own = get_sm_count(0)
+        own = device_facts(0).sm_count
         assert own != 7
         built = _FactReader(device_index=1)
         assert built._build_device == torch.device("cuda", 1)

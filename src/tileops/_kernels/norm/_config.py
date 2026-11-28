@@ -8,7 +8,7 @@ import tilelang.language as T
 import torch
 
 from tileops._kernels.constants import STATIC_SHARED_BYTES, VECTOR_ACCESS_BYTES
-from tileops._kernels.tiling import ALIGNMENT
+from tileops._kernels.tiling import ALIGNMENT, align_up
 
 __all__ = [
     "FP32_RANGE_BOUND",
@@ -53,7 +53,7 @@ def row_padding(n: int, elem_bytes: int) -> int:
     pow2 = 1 << (n - 1).bit_length()
     if pow2 * elem_bytes <= STATIC_SHARED_BYTES:
         return max(pow2, ALIGNMENT)
-    return -(-n // ALIGNMENT) * ALIGNMENT
+    return align_up(n, ALIGNMENT)
 
 
 def widths_for_row(n_padded: int) -> tuple:

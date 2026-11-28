@@ -23,6 +23,7 @@ from tileops._kernels.sampling.row_tiles import (
     row_split,
     vector_width,
 )
+from tileops._kernels.tiling import align_up
 from tileops._kernels.warp_reduce import warp_reduce
 from tileops._utils import WARP_LANES
 
@@ -294,7 +295,7 @@ class SamplingFromProbsFwdKernel(Kernel, SamplingFromProbsFwdInterface):
         # ``seg``, one float64 entry per (slot, warp) of a block's chunk, against the budget
         # less one alignment for each of the descent's six other buffers.
         budget = BLOCK_SHARED_BYTES_OPT_IN[call.arch] - 6 * SHARED_BUFFER_ALIGN_BYTES
-        held = -(-8 * leaves // SHARED_BUFFER_ALIGN_BYTES) * SHARED_BUFFER_ALIGN_BYTES
+        held = align_up(8 * leaves, SHARED_BUFFER_ALIGN_BYTES)
         if held > budget:
             return (
                 f"folds a row into {leaves} shared float64 entries, which take {held} bytes "

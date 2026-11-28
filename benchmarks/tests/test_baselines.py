@@ -239,7 +239,7 @@ def test_w4a8_baseline_domain_rejects_partial_reorder_rows(monkeypatch, n, k, gr
     """The benchmark refuses unsafe library preparation before launching a CUDA kernel."""
     from benchmarks.ops import bench_gemm
 
-    monkeypatch.setattr(bench_gemm, "get_sm_version", lambda: 90)
+    monkeypatch.setattr(bench_gemm, "device_facts", lambda: SimpleNamespace(arch=90))
     reason = bench_gemm._vllm_w4a8_unsupported_reason(n, k, group)
     assert reason is None if expected is None else expected in reason
 
@@ -258,7 +258,7 @@ def test_w4a8_baseline_domain_rejects_partial_reorder_rows(monkeypatch, n, k, gr
 def test_marlin_baseline_reads_the_callers_group_size(monkeypatch, n, k, group_size, expected):
     from benchmarks.ops import bench_gemm
 
-    monkeypatch.setattr(bench_gemm, "get_sm_version", lambda: 90)
+    monkeypatch.setattr(bench_gemm, "device_facts", lambda: SimpleNamespace(arch=90))
     reason = bench_gemm._marlin_w4a16_unsupported_reason(n, k, group_size)
     assert reason is None if expected is None else expected in reason
 
@@ -266,7 +266,7 @@ def test_marlin_baseline_reads_the_callers_group_size(monkeypatch, n, k, group_s
 def _deepgemm_fp8_on(monkeypatch, arch, m, n, k, out_dtype, mode):
     from benchmarks.ops import bench_gemm
 
-    monkeypatch.setattr(bench_gemm, "get_sm_version", lambda: arch)
+    monkeypatch.setattr(bench_gemm, "device_facts", lambda: SimpleNamespace(arch=arch))
     monkeypatch.setattr(bench_gemm, "deepgemm_op", lambda name: None)
     workload = SimpleNamespace(m=m, n=n, k=k, out_dtype=out_dtype, scale_mode=mode, bias=False)
     return bench_gemm._deepgemm_fp8(workload)
@@ -332,7 +332,7 @@ def test_quack_baseline_checks_storage_strides(m, n, k, trans_a, trans_b, suppor
 def test_flashinfer_low_latency_preparation_domain(monkeypatch, n, k, supported):
     from benchmarks.ops import bench_gemm
 
-    monkeypatch.setattr(bench_gemm, "get_sm_version", lambda index: 100)
+    monkeypatch.setattr(bench_gemm, "device_facts", lambda index: SimpleNamespace(arch=100))
     sm100 = SimpleNamespace(type="cuda", index=0)  # lint: device-literal allow: no tensor
     assert (
         bench_gemm._flashinfer_fp8_per_tensor_unsupported_reason(sm100, n, k) is None
@@ -343,7 +343,7 @@ def test_flashinfer_low_latency_refuses_a_non_cuda_device_before_reading_arch(mo
     from benchmarks.ops import bench_gemm
 
     monkeypatch.setattr(
-        bench_gemm, "get_sm_version", lambda index: pytest.fail("read CUDA arch for a CPU call")
+        bench_gemm, "device_facts", lambda index: pytest.fail("read CUDA arch for a CPU call")
     )
     reason = bench_gemm._flashinfer_fp8_per_tensor_unsupported_reason(torch.device("cpu"), 32, 128)
     assert "runs on cuda" in reason

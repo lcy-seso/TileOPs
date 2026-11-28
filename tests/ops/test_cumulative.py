@@ -285,10 +285,10 @@ def test_dtype_casts_the_input_before_the_scan(
 @pytest.mark.sm90
 def test_cumsum_cluster_exchanges_the_totals_of_all_eight_blocks() -> None:
     from tileops._kernels.reduction.cumulative import CumsumClusterScanKernel
-    from tileops._utils.utils import get_sm_count
+    from tileops._utils.utils import device_facts
     from tileops.backend import BUILTIN
 
-    if get_sm_count() < 128:
+    if device_facts().sm_count < 128:
         pytest.skip("The eight-block cluster kernel requires at least 128 SMs")
     rows, width = 24, 65536
     storage = torch.empty(rows * width + 1, dtype=torch.float32, device=run_device())

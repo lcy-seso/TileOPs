@@ -59,6 +59,7 @@ SM_RESIDENT_BLOCKS: dict[int, int] = {
     86: 16,
     89: 24,
     90: 32,
+    100: 32,
 }
 
 # log2(e), to fold exp(x) into the single-instruction exp2(x * LOG2E).

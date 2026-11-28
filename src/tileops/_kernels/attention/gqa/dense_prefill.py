@@ -113,7 +113,7 @@ class GQADensePrefillFwdKernel(Kernel, GQADenseFwdInterface):
             call.window_size_left,
             call.window_size_right,
             **({"has_sinks": True} if call.has_sinks else {}),
-            **({"qk_dtype": str(self.qk_dtype).split(".")[-1]} if call.is_fp8 else {}),
+            **({"qk_dtype": self.dtype_to_str(self.qk_dtype)} if call.is_fp8 else {}),
         )
         self.rope = make_dense_qk_rope_preprocessor(
             batch=call.batch,

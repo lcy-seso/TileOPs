@@ -56,7 +56,8 @@ class PagedKVCacheGatherFwdOp(Op):
                 ends at ``out``'s row count and holds no sequence longer than the tokens a
                 ``block_table`` row's pages hold, and that ``block_table`` and ``seq_starts``
                 lie in their manifest ranges.
-            target: Backend target, or None to resolve from the input device.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.out_dtype = out_dtype
         self.validate_inputs = validate_inputs

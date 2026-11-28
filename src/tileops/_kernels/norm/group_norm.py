@@ -658,7 +658,7 @@ def _staged_rows(M, D, eps, dtype, block_m, threads, num_groups, channels_per_gr
         affine: Whether row ``m`` column ``d`` is scaled and shifted by channel
             ``(m % num_groups) * channels_per_group + d // (D / channels_per_group)``.
     """
-    D_padded = row_padding(D, 4 if dtype == "float32" else 2)
+    D_padded = row_padding(D, getattr(torch, dtype).itemsize)
     spatial_size = D // channels_per_group
     # A non-aligned D or a tail row block reads and writes past the end unless guarded.
     guarded = D_padded != D or M % block_m != 0

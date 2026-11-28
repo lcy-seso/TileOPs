@@ -1020,166 +1020,21 @@ class GQAPagedFP8WSKernel(Kernel, GQAPagedFwdInterface):
         self.block_n, self.stages, self.cstages, self.row_sums = tiling
         # Whether a request's key tiles split between the warpgroups; a table too short for
         # _SPLIT_MIN_TILES tiles builds without the split.
-        self.split_small = max_pages_per_req * page_size >= self._SPLIT_MIN_TILES * self.block_n
-        self.split_chunks = self.split_chunks_for(
-            batch,
-            heads_kv,
-            dim,
-            max_pages_per_req * page_size,
-            self.block_n,
-            self.query_dtype == torch.float8_e4m3fn,
-        )
+        table_rows = max_pages_per_req * page_size
+        self.split_small = table_rows >= self._SPLIT_MIN_TILES * self.block_n
+        # Runs a split request's key tiles divide into. An FP8 query takes two, letting the
+        # consumer warpgroups overlap long requests, when the table holds two runs of
+        # _SPLIT_MIN_TILES tiles and every request and KV head's partials fit _SPLIT_WORKSPACE
+        # bytes; a 16-bit query keeps one, as its program runs slower with the combine built in.
+        runs, partial = 2, self._TILE_ROWS // 2 * (dim * 2 + 8)
+        long_table = table_rows >= runs * self._SPLIT_MIN_TILES * self.block_n
+        fits = batch * heads_kv * runs * partial <= self._SPLIT_WORKSPACE
+        q_fp8 = self.query_dtype == torch.float8_e4m3fn
+        self.split_chunks = runs if q_fp8 and long_table and fits else 1
         device = torch.device("cuda", self.device_index)
         self._unit_q_scale = torch.ones((batch, heads_kv), dtype=torch.float32, device=device)
         self._counters: dict = {}
         self.init_config(config)
-
-    @property
-    def default_config(self) -> dict:
-        return {}
-
-    @classmethod
-    def build_program(
-        cls,
-        batch: int,
-        heads: int,
-        heads_kv: int,
-        dim: int,
-        page_size: int,
-        max_pages_per_req: int,
-        is_causal: bool,
-        sm_scale: float,
-        softcap: float,
-        dtype: str,
-        query_dtype: str,
-        per_request_kv_scale: bool,
-        tiling: "tuple[int, int, int, bool]",
-        sm_count: int,
-    ):
-        """The persistent program for one geometry; a request's key tiles split between the
-        warpgroups where the table holds _SPLIT_MIN_TILES tiles."""
-        block_n, stages, cstages, row_sums = tiling
-        return _gqa_paged_fp8_ws_kernel(
-            batch,
-            heads,
-            heads_kv,
-            dim,
-            page_size,
-            max_pages_per_req,
-            is_causal,
-            sm_scale,
-            softcap,
-            dtype,
-            query_dtype,
-            per_request_kv_scale,
-            block_n,
-            stages,
-            cstages,
-            sm_count,
-            max_pages_per_req * page_size >= cls._SPLIT_MIN_TILES * block_n,
-            cls.split_chunks_for(
-                batch,
-                heads_kv,
-                dim,
-                max_pages_per_req * page_size,
-                block_n,
-                query_dtype == "float8_e4m3fn",
-            ),
-            row_sums,
-            cls._ITEM_META_WORDS,
-            cls._ROW_SUM_COLS,
-            cls._SPLIT_MIN_TILES,
-        )
-
-    @classmethod
-    def split_chunks_for(
-        cls, batch: int, heads_kv: int, dim: int, table_rows: int, block_n: int, q_fp8: bool
-    ) -> int:
-        """Runs a split request's key tiles divide into.
-
-        An FP8 query takes two runs when the table holds two runs of
-        _SPLIT_MIN_TILES tiles and the partials of every request and KV head fit
-        _SPLIT_WORKSPACE bytes. Every other call takes one run.
-        """
-        # Two runs let the consumer warpgroups overlap long FP8 requests.
-        split_chunks = 2
-        partial = cls._TILE_ROWS // 2 * (dim * 2 + 8)
-        long_table = table_rows >= split_chunks * cls._SPLIT_MIN_TILES * block_n
-        fits = batch * heads_kv * split_chunks * partial <= cls._SPLIT_WORKSPACE
-        # A 16-bit query keeps one run: its program runs slower with the combine built in.
-        return split_chunks if q_fp8 and long_table and fits else 1
-
-    @staticmethod
-    def split_workspace(
-        counters: dict,
-        chunks: int,
-        batch: int,
-        heads_kv: int,
-        dim: int,
-        wide: torch.dtype,
-        device,
-    ) -> tuple:
-        """The split runs' partials and arrival counts of the stream's launches: the counts
-        return to zero as each request and KV head combines, so they are zeroed once. A
-        program that keeps one run a request takes placeholders it never reads."""
-        if chunks == 1:
-            batch = heads_kv = 1
-        rows = GQAPagedFP8WSKernel._TILE_ROWS // 2
-        key = ("split", torch.cuda.current_stream(device).cuda_stream, wide)
-        workspace = None if torch.cuda.is_current_stream_capturing() else counters.get(key)
-        if workspace is None:
-            workspace = (
-                torch.empty((batch, heads_kv, chunks, rows, dim), dtype=wide, device=device),
-                torch.empty((batch, heads_kv, chunks, 2, rows), dtype=torch.float32, device=device),
-                torch.zeros(batch * heads_kv, dtype=torch.int32, device=device),
-            )
-            if not torch.cuda.is_current_stream_capturing():
-                counters[key] = workspace
-        return workspace
-
-    @staticmethod
-    def launch(
-        program,
-        counters: dict,
-        q: torch.Tensor,
-        k_pool: torch.Tensor,
-        v_pool: torch.Tensor,
-        cache_seqlens: torch.Tensor,
-        page_table: torch.Tensor,
-        cu_seqlens_q: torch.Tensor,
-        q_scale: torch.Tensor,
-        k_scale: torch.Tensor,
-        v_scale: torch.Tensor,
-        dtype: torch.dtype,
-        split_chunks: int,
-    ) -> torch.Tensor:
-        """Run *program* over the pools, claiming work from the stream's counter in
-        *counters*: a new output of q's shape in *dtype*. *split_chunks* is the program's
-        split_chunks_for, which sizes its workspace."""
-        out = torch.empty(q.shape, dtype=dtype, device=q.device)
-        program(
-            q,
-            k_pool,
-            v_pool,
-            cache_seqlens,
-            page_table,
-            cu_seqlens_q,
-            q_scale,
-            k_scale,
-            v_scale,
-            out,
-            stream_counter(counters, q.device),
-            *GQAPagedFP8WSKernel.split_workspace(
-                counters,
-                split_chunks,
-                page_table.shape[0],
-                k_pool.shape[1],
-                q.shape[2],
-                torch.float16 if q.dtype == torch.float8_e4m3fn else dtype,
-                q.device,
-            ),
-        )
-        return out
 
     @property
     def kernel(self):
@@ -1188,7 +1043,7 @@ class GQAPagedFP8WSKernel(Kernel, GQAPagedFwdInterface):
 
     def _compile(self, cfg: dict):
         """The persistent program for this geometry."""
-        return self.build_program(
+        return _gqa_paged_fp8_ws_kernel(
             self.batch,
             self.heads,
             self.heads_kv,
@@ -1199,10 +1054,18 @@ class GQAPagedFP8WSKernel(Kernel, GQAPagedFwdInterface):
             self.sm_scale,
             self.softcap,
             self.dtype_str,
-            str(self.query_dtype).removeprefix("torch."),
+            self.dtype_to_str(self.query_dtype),
             self.per_request_kv_scale,
-            (self.block_n, self.stages, self.cstages, self.row_sums),
+            self.block_n,
+            self.stages,
+            self.cstages,
             self.build_target.sm_count,
+            self.split_small,
+            self.split_chunks,
+            self.row_sums,
+            self._ITEM_META_WORDS,
+            self._ROW_SUM_COLS,
+            self._SPLIT_MIN_TILES,
         )
 
     def forward(
@@ -1222,10 +1085,29 @@ class GQAPagedFP8WSKernel(Kernel, GQAPagedFwdInterface):
     ) -> torch.Tensor:
         if q.shape[0] == 0:
             return torch.empty(q.shape, dtype=self.dtype, device=q.device)
-        return self.launch(
-            self.program(self._compile),
-            self._counters,
-            q.contiguous(),
+        q = q.contiguous()
+        out = torch.empty(q.shape, dtype=self.dtype, device=q.device)
+        # The split runs' partials and arrival counts of the stream's launches: the counts
+        # return to zero as each request and KV head combines, so they are zeroed once. A
+        # program that keeps one run a request takes placeholders it never reads.
+        chunks, rows = self.split_chunks, self._TILE_ROWS // 2
+        batch, heads_kv = (self.batch, self.heads_kv) if chunks > 1 else (1, 1)
+        wide = torch.float16 if q.dtype == torch.float8_e4m3fn else self.dtype
+        capturing = torch.cuda.is_current_stream_capturing()
+        key = ("split", torch.cuda.current_stream(q.device).cuda_stream, wide)
+        workspace = None if capturing else self._counters.get(key)
+        if workspace is None:
+            workspace = (
+                torch.empty((batch, heads_kv, chunks, rows, self.dim), dtype=wide, device=q.device),
+                torch.empty(
+                    (batch, heads_kv, chunks, 2, rows), dtype=torch.float32, device=q.device
+                ),
+                torch.zeros(batch * heads_kv, dtype=torch.int32, device=q.device),
+            )
+            if not capturing:
+                self._counters[key] = workspace
+        self.program(self._compile)(
+            q,
             k_pool,
             v_pool,
             cache_seqlens,
@@ -1234,6 +1116,8 @@ class GQAPagedFP8WSKernel(Kernel, GQAPagedFwdInterface):
             q_scale if q_scale is not None else self._unit_q_scale,
             k_scale,
             v_scale,
-            self.dtype,
-            self.split_chunks,
+            out,
+            stream_counter(self._counters, q.device),
+            *workspace,
         )
+        return out

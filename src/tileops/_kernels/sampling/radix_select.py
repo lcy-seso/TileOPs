@@ -13,6 +13,7 @@ import tilelang.language as T
 import torch
 
 from tileops._kernels.constants import MAX_PORTABLE_CLUSTER_BLOCKS, VECTOR_ACCESS_BYTES
+from tileops._kernels.streaming_load import load16_evict_first
 from tileops._kernels.warp_reduce import warp_reduce
 from tileops._utils import WARP_LANES, WARP_SHUFFLE_STAGES
 
@@ -130,7 +131,7 @@ def key_select(vocab: int, dtype: str, threads: int, cluster: int, slots: int) -
     # A missed sample bracket adds a radix pass without changing the selected rank.
     bracket_sigmas = 4.0
     bracket_slack = 3.0
-    itemsize = torch.empty((), dtype=getattr(torch, dtype)).element_size()
+    itemsize = getattr(torch, dtype).itemsize
     vec = VECTOR_ACCESS_BYTES // itemsize
     words = VECTOR_ACCESS_BYTES // 4
     per_word = 4 // itemsize
@@ -192,12 +193,7 @@ def key_select(vocab: int, dtype: str, threads: int, cluster: int, slots: int) -
         for j in T.unroll(slots):
             if aligned:
                 if element(j, 0, 0) < out_of_row:
-                    T.call_extern(
-                        "handle",
-                        "tileops::load16_evict_first",
-                        T.address_of(vals[j * words]),
-                        T.address_of(x[base + element(j, 0, 0)]),
-                    )
+                    load16_evict_first(vals, j * words, x, base + element(j, 0, 0))
                 else:
                     for c in T.unroll(words):
                         vals[j * words + c] = T.uint32(word_neg_inf)

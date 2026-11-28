@@ -62,8 +62,8 @@ class MoEGroupedGEMMFP8FwdOp(MoELayoutRowsRoofline, Op):
         Args:
             layout: The masked slab capacity ``max_m`` each expert's rows are padded to, or
                 the packing and metadata of contiguous expert rows.
-            target: Which backend serves this instance; detected from the tensors when
-                ``None``.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.layout = layout
         super().__init__(target=target)

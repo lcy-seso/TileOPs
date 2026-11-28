@@ -28,21 +28,11 @@ from tileops._kernels.elementwise.call_spec import (
     UnaryElementwiseFwdInterface,
 )
 from tileops._kernels.kernel_base import KernelInterface
-from tileops._ops._signature_codegen import tensorless_device
 from tileops._ops.op_base import Op
 from tileops.backend import Target
 
 # The one name every elementwise op calls its kernel through.
 ELEMENTWISE = "elementwise"
-
-
-def generated_on(op: Op) -> "torch.device | None":
-    """Where an op with no tensor input produces its output: its call device.
-
-    The call spec names it rather than leaving it unset, because a build reads the device it
-    compiles for and the entry is keyed by the call.
-    """
-    return tensorless_device(op)
 
 
 class UnaryOp(Op):
@@ -55,19 +45,6 @@ class UnaryOp(Op):
     interfaces: ClassVar[Mapping[str, type[KernelInterface]]] = {
         ELEMENTWISE: UnaryElementwiseFwdInterface
     }
-
-    def __init__(
-        self,
-        *,
-        target: Target = None,
-    ):
-        """Build the op. Shapes and dtype are taken from the first call.
-
-        Args:
-            target: Which set of kernels serves this op — a target name, ``BUILTIN`` for
-                the in-tree kernels, or ``None`` to decide from the input device.
-        """
-        super().__init__(target=target)
 
     def _call_spec(self, input: torch.Tensor) -> ElementwiseCall:
         """The call record for *input*; a subclass with parameters widens it."""
@@ -97,19 +74,6 @@ class BinaryOp(Op):
     interfaces: ClassVar[Mapping[str, type[KernelInterface]]] = {
         ELEMENTWISE: BinaryElementwiseFwdInterface
     }
-
-    def __init__(
-        self,
-        *,
-        target: Target = None,
-    ):
-        """Build the op. Shapes and dtype are taken from the first call.
-
-        Args:
-            target: Which set of kernels serves this op — a target name, ``BUILTIN`` for
-                the in-tree kernels, or ``None`` to decide from the input device.
-        """
-        super().__init__(target=target)
 
     def _call_spec(self, input: torch.Tensor, other: torch.Tensor) -> BroadcastCall:
         """The call record for the two operands; a subclass with parameters widens it."""
@@ -148,19 +112,6 @@ class FusedGatedOp(Op):
     interfaces: ClassVar[Mapping[str, type[KernelInterface]]] = {
         ELEMENTWISE: FusedGatedFwdInterface
     }
-
-    def __init__(
-        self,
-        *,
-        target: Target = None,
-    ):
-        """Build the op. Shapes and dtype are taken from the first call.
-
-        Args:
-            target: Which set of kernels serves this op — a target name, ``BUILTIN`` for
-                the in-tree kernels, or ``None`` to decide from the input device.
-        """
-        super().__init__(target=target)
 
     def _call_spec(self, input: torch.Tensor) -> FusedGatedCall:
         return FusedGatedCall(
@@ -225,7 +176,8 @@ class _ParamFreeActivationOp(_UnaryActivationMixin, UnaryOp):
 
         Args:
             inplace: When True, write the result into ``input`` and return ``input``.
-            target: Backend target to serve this op, or ``None`` to decide from the input device.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.inplace = inplace
         super().__init__(target=target)

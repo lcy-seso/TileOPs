@@ -12,6 +12,10 @@ from tileops._kernels.kernel_base import KernelInterface
 
 __all__ = [
     "DequantizeCall",
+    "FP4QuantCall",
+    "FP4QuantFwdInterface",
+    "FP8QuantCall",
+    "FP8QuantFwdInterface",
     "FP8QuantPerBlockFwdInterface",
     "INT4QuantPerGroupFwdInterface",
     "INT8DequantPerBlockFwdInterface",
@@ -217,4 +221,106 @@ class SmoothQuantFwdInterface(KernelInterface):
         Returns:
             A new ``q`` shaped like *x* in ``int8`` and a new ``scale`` ``[call.rows]`` in
             ``float32``.
+        """
+
+
+@dataclasses.dataclass(frozen=True)
+class FP4QuantCall(CallSpec):
+    """One per-block e2m1 quantization of a ``[*S, n]`` tensor, blocks of ``block_size``
+    columns.
+
+    The leading axes ``*S`` are not part of the call: one kernel serves any token count.
+    """
+
+    n: int = 0
+    block_size: int = 32
+    dtype: torch.dtype = torch.bfloat16
+    inplace: bool = False
+
+
+class FP4QuantFwdInterface(KernelInterface):
+    """Block-wise quantization to e2m1 under power-of-two scales."""
+
+    request = FP4QuantCall
+
+    @abstractmethod
+    def forward(
+        self, input_tensor: torch.Tensor
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        """Scale each block by the power of two its maximum rounds up to, and round to e2m1.
+
+        A block is ``call.block_size`` adjacent columns of the last axis. Its scale is
+        ``2 ** ceil(log2(m * r))``, ``m`` the block's absolute maximum floored at
+        ``6 * 2 ** -126`` and ``r`` the float32 nearest ``1 / 6``; each element's code is
+        ``x / scale`` clamped to ``[-6, 6]`` and rounded to the nearest e2m1 value, ties to
+        the even code, its sign kept for a zero. A block holding an infinity or a NaN has no
+        defined result. Nothing but *input_tensor* under ``call.inplace`` is written in
+        place, and no output aliases the input.
+
+        Args:
+            input_tensor: ``[*S, call.n]`` in ``call.dtype`` on ``call.device``, contiguous;
+                with ``call.inplace``, of any layout.
+
+        Returns:
+            ``(q, scale)`` on ``call.device``: new contiguous ``uint8`` ``[*S, call.n // 2]``
+            codes, two a byte with the even column in the low nibble, and new contiguous
+            ``float8_e8m0fnu`` ``[*S, call.n // call.block_size]`` scales. With
+            ``call.inplace``, *input_tensor* is overwritten with each element's e2m1 value
+            times its scale and ``(None, None)`` returns.
+        """
+
+
+@dataclasses.dataclass(frozen=True)
+class FP8QuantCall(CallSpec):
+    """One per-group FP8 quantization of a ``[*S, k]`` tensor, groups of ``group_size`` columns.
+
+    The leading axes ``*S`` are not part of the call: one kernel serves any token count.
+    """
+
+    k: int = 0
+    group_size: int = 0
+    eps: float = 1e-10
+    dtype: torch.dtype = torch.bfloat16
+    column_major_scales: bool = False
+    tma_aligned_scales: bool = False
+    use_ue8m0: bool | None = None
+    scale_dtype: torch.dtype = torch.float32
+    inplace: bool = False
+
+
+class FP8QuantFwdInterface(KernelInterface):
+    """Group-wise quantization to ``float8_e4m3fn``."""
+
+    request = FP8QuantCall
+
+    @abstractmethod
+    def forward(
+        self, input_tensor: torch.Tensor, out_q: torch.Tensor | None
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        """Scale each group by its own maximum, writing the codes into *out_q* when given.
+
+        A group is ``call.group_size`` adjacent columns of the last axis. Its scale is the
+        absolute maximum over the group, floored at ``call.eps``, divided by 448; each element
+        is multiplied by the reciprocal of that scale and clamped to the ``float8_e4m3fn``
+        range. With ``call.use_ue8m0`` the scale is ``2 ** ceil(log2(m * r))``, ``m`` the
+        floored maximum and ``r`` the float32 nearest ``1 / 448``, and each code is
+        ``x / scale`` clamped and rounded to nearest even, exactly. A group holding an
+        infinity or a NaN, or one whose floored maximum is below ``448 / 3.4e38`` so that the
+        reciprocal overflows float32, has no defined result: whether the maximum and the
+        clamp carry the non-finite value is left to the implementation. Nothing but *out_q*,
+        or with ``call.inplace`` *input_tensor*, is written in place, and no output aliases
+        the input.
+
+        Args:
+            input_tensor: ``[*S, call.k]`` in ``call.dtype`` on ``call.device``, contiguous;
+                with ``call.inplace``, of any layout.
+            out_q: ``[*S, call.k]`` ``float8_e4m3fn`` on ``call.device``, contiguous, the
+                codes are stored into; or None.
+
+        Returns:
+            ``(q, scale)`` on ``call.device``: the codes, *out_q* where given and otherwise a
+            new contiguous ``float8_e4m3fn`` tensor shaped as the input, and new contiguous
+            ``call.scale_dtype`` ``[*S, call.k // call.group_size]`` scales. With
+            ``call.inplace``, *input_tensor* is overwritten with each element's code times its
+            scale and ``(None, None)`` returns.
         """

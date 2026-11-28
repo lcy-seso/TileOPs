@@ -7,6 +7,7 @@ from tilelang.layout import make_swizzled_layout
 
 from tileops._csrc import csrc_include
 from tileops._kernels.attention.call_spec import ATTENTION_DTYPES
+from tileops._kernels.attention.gqa.paged_ws import claim_work
 from tileops._kernels.attention.online_softmax import (
     finite_max_floor,
     make_apply_softcap,
@@ -783,13 +784,6 @@ def _gqa_prefill_varlen_ws_kernel(
                     meta[6] = t_hi - t_lo
 
     @T.macro
-    def fetch(Sched, lane, work):
-        """Claim the next work item into work[0]: lane 0 claims, the warp shares it."""
-        if lane == 0:
-            work[0] = T.atomic_add(Sched[0], 1, return_prev=True)
-        work[0] = T.tvm_warp_shuffle(T.uint32(0xFFFFFFFF), work[0], 0, 32, 32)
-
-    @T.macro
     def load_packed_q(Q, Qs, slot, q_bar, q_start, q_end, kv_head):
         """Load a warpgroup's positions as boxes of (position, head, *box* channels): its rows
         are the packed rows in order. A warpgroup the request does not fill loads its
@@ -850,7 +844,7 @@ def _gqa_prefill_varlen_ws_kernel(
         issued = T.alloc_var("int32", init=0)
         loaded = T.alloc_var("int32", init=0)
         work = T.alloc_local([1], "int32")
-        fetch(Sched, lane, work)
+        claim_work(Sched, lane, work)
         while work[0] < claims:
             if packs:
                 locate_packed(
@@ -961,7 +955,7 @@ def _gqa_prefill_varlen_ws_kernel(
                         T.mbarrier_arrive(vready[s])
                 issued += meta[6]
                 loaded += 1
-            fetch(Sched, lane, work)
+            claim_work(Sched, lane, work)
 
         # Stop the consumers, then leave the counters zeroed for the next launch.
         T.mbarrier_wait_parity(qfree[loaded % 2], ((loaded // 2) % 2) ^ 1)
@@ -1895,10 +1889,6 @@ class GQAPrefillVarlenWSFwdKernel(VarlenKernel):
             tail_p,
         )
 
-    @property
-    def default_config(self) -> dict:
-        return {}
-
     def __init__(self, *args, **kwargs) -> None:
         self._counters: dict = {}
         super().__init__(*args, **kwargs)
@@ -1990,8 +1980,8 @@ class GQAVarlenPackedWSFwdKernel(GQAPrefillVarlenWSFwdKernel):
 
     @classmethod
     def refusal(cls, call) -> "str | None":
-        if call.heads_kv <= 0 or call.heads % call.heads_kv != 0:
-            return "requires heads a multiple of heads_kv"
+        if not call.whole_head_groups:
+            return "requires heads to be a multiple of heads_kv"
         group = call.heads // call.heads_kv
         if group == 1 or 64 % group != 0:
             return "requires a query group that divides a warpgroup's 64 rows"

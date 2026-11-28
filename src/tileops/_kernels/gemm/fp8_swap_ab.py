@@ -111,7 +111,7 @@ def _gemm_fp8_stream_kernel(
     @tilelang.jit(
         out_idx=[-1],
         # The producer and consumer warpgroups are written by hand below.
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16", "-DENABLE_FP8"],
     )
     def _gemm_fp8_stream_func(num_stages: int, ctas: int) -> Callable:

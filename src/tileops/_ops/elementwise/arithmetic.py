@@ -55,7 +55,8 @@ class _AlphaScaledBinaryOp(BinaryOp):
 
         Args:
             alpha: Multiplier on ``other`` (default 1).
-            target: Backend target to serve this op, or ``None`` to decide from the input device.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.alpha = alpha
         super().__init__(target=target)
@@ -110,7 +111,8 @@ class DivFwdOp(BinaryOp):
 
         Args:
             rounding_mode: ``None``, ``"trunc"`` or ``"floor"``.
-            target: Backend target to serve this op, or ``None`` to decide from the input device.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.rounding_mode = rounding_mode
         super().__init__(target=target)
@@ -214,18 +216,6 @@ class LerpFwdOp(Op):
         _NUMBER_WEIGHT: LerpFwdInterface,
         _TENSOR_WEIGHT: LerpTensorFwdInterface,
     }
-
-    def __init__(
-        self,
-        *,
-        target: Target = None,
-    ):
-        """Build the op. Shapes and dtype are taken from the first call.
-
-        Args:
-            target: Which set of kernels serves this op.
-        """
-        super().__init__(target=target)
 
     def forward(
         self,

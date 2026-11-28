@@ -62,12 +62,11 @@ class GatedPoolCompressFwdOp(Op):
         """Build the op.
 
         Args:
-            ratio: Manifest ``params.ratio``, ``int``: the positions a window pools.
-            overlap: Manifest ``params.overlap``, ``bool``: whether a window also pools the
-                previous window's first ``D`` channels, ``kv`` and ``score`` then holding
-                ``2 * D`` channels.
-            validate_inputs: Manifest ``params.validate_inputs``, ``bool``: check
-                ``cu_seqlens`` and the ``state_slots`` range on the CPU before each call.
+            ratio: The positions a window pools.
+            overlap: Whether a window also pools the previous window's first ``D`` channels,
+                ``kv`` and ``score`` then holding ``2 * D`` channels.
+            validate_inputs: Check ``cu_seqlens`` and the ``state_slots`` range on the CPU
+                before each call.
             target: Which set of kernels serves this op — a target name, ``BUILTIN``
                 for the in-tree kernels, or ``None`` to decide from the input device.
         """

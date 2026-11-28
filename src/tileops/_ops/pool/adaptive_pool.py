@@ -39,15 +39,16 @@ class _AdaptivePool2dFwdOpBase(Op):
         """Build the op. Shapes and dtype are taken from the first call.
 
         Args:
-            output_size: Manifest ``params.output_size``, ``int | None | tuple[int | None, int | None] | list[int | None]``;
-                a ``None`` extent keeps the input's.
-            target: Backend target to serve this op, or ``None`` to decide from the input device.
+            output_size: Output ``(H_out, W_out)``, or one int for both; a ``None`` extent
+                keeps the input's.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.output_size = output_size
         super().__init__(target=target)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        """Run the op on ``input``.
+        """Pool ``input``.
 
         Args:
             input: Input, $[C \\times H \\times W]$ or $[N \\times C \\times H \\times W]$.
@@ -111,12 +112,14 @@ class AdaptiveMaxPool2dIndicesFwdOp(_AdaptivePool2dFwdOpBase):
     }
 
     def forward(self, input: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run the op on the inputs the manifest declares.
+        """Pool ``input`` and return where each maximum came from.
 
         Args:
-            input: Input tensor, dtype ``float16 | bfloat16``.
+            input: ``(C, H_in, W_in)`` or ``(N, C, H_in, W_in)``, float16 or bfloat16.
 
         Returns:
-            ``output``, ``indices``, as the manifest declares.
+            ``output`` with the leading axes of ``input`` and ``output_size`` as its last two
+            extents, in the input dtype, and ``indices``, int64 of the same shape: the flat
+            position of each maximum within its ``(H_in, W_in)`` plane.
         """
         return super().forward(input)

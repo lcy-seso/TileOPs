@@ -116,6 +116,7 @@ def describe() -> dict:
             # The class itself: its signature is what construction binds, `__new__` included.
             out[path] = _entry("class", obj)
             if module != "tileops.authoring" and issubclass(obj, tileops.Op):
+                out[path]["op"] = True
                 # A concrete op: callers bind its constructor and forward, a compiled graph
                 # names its torch operators, and `tileops.authoring.Op` covers what it inherits.
                 out[f"{path}.forward"] = _entry("method", obj.forward)
@@ -184,6 +185,10 @@ def breaks(old: dict, new: dict) -> list[str]:
     out = []
     for path, before in sorted(old.items()):
         after = new.get(path)
+        owner, _, member = path.rpartition(".")
+        if after is None and new.get(owner, {}).get("op"):
+            # An op that drops its override still inherits the member from `Op`.
+            after = new.get(f"tileops.authoring.Op.{member}")
         if after is None:
             out.append(f"{path}: removed")
         elif after["kind"] != before["kind"]:

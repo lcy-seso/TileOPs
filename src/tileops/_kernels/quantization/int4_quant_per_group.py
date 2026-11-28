@@ -11,6 +11,8 @@ from tileops._kernels.build_target import target_cache
 from tileops._kernels.constants import VECTOR_ACCESS_BYTES
 from tileops._kernels.kernel_base import Kernel
 from tileops._kernels.quantization.call_spec import INT4QuantPerGroupFwdInterface, QuantizeCall
+from tileops._kernels.streaming_load import load16, load16_evict_first
+from tileops._kernels.tiling import align_up
 from tileops._utils import WARP_LANES
 
 __all__ = ["INT4QuantPerGroupFwdKernel", "INT4QuantPerGroupRowFwdKernel"]
@@ -48,7 +50,7 @@ def _int4_quant_per_group_kernel(
         assert threads % WARP_LANES == 0
         assert threads * cpt >= lanes if per_cta else (threads % lanes == 0 and cpt == 1)
         warps = threads // WARP_LANES
-        load = "tileops::load16_evict_first" if evict_first else "tileops::load16"
+        load = load16_evict_first if evict_first else load16
 
         def widen(word, half):
             bits = T.cast(word >> T.cast(16 * half, "uint32"), "uint16")
@@ -87,12 +89,7 @@ def _int4_quant_per_group_kernel(
                     c = chunk_of(bx, u, tx)
                     if held(u, tx) & (c < chunks):
                         for p in T.unroll(vpc):
-                            T.call_extern(
-                                "handle",
-                                load,
-                                T.address_of(vals[u, p * vwords]),
-                                T.address_of(w[c * chunk + p * vec]),
-                            )
+                            load(vals, (u, p * vwords), w, c * chunk + p * vec)
                     else:
                         for e in T.serial(words):
                             vals[u, e] = T.uint32(0)
@@ -299,7 +296,7 @@ class INT4QuantPerGroupRowFwdKernel(_INT4QuantPerGroupFwdKernel):
     def default_config(self) -> dict:
         lanes = self.call.group_size // self._CHUNK
         cpt = max(self._CPT, -(-lanes // self._MAX_THREADS))
-        threads = -(-lanes // cpt // WARP_LANES) * WARP_LANES
+        threads = align_up(-(-lanes // cpt), WARP_LANES)
         registers = self.call.regs_per_sm
         return {
             "threads": threads,

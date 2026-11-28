@@ -58,12 +58,15 @@ class _MaxPoolFwdOpBase(Op):
         """Build the op. Shapes and dtype are taken from the first call.
 
         Args:
-            kernel_size: Manifest ``params.kernel_size``, an int or one per spatial axis.
-            stride: Manifest ``params.stride``, an int, one per axis, or ``None``.
-            padding: Manifest ``params.padding``, an int or one per spatial axis.
-            dilation: Manifest ``params.dilation``, an int or one per spatial axis.
-            ceil_mode: Manifest ``params.ceil_mode``, ``bool``, default ``False``.
-            target: Backend target to serve this op, or ``None`` to decide from the input device.
+            kernel_size: Window extent, an int or one per spatial axis.
+            stride: Window step, an int or one per spatial axis; ``None`` steps by
+                ``kernel_size``.
+            padding: Implicit ``-inf`` padding on both sides, an int or one per spatial
+                axis, at most half the window.
+            dilation: Spacing between window elements, an int or one per spatial axis.
+            ceil_mode: Round each output extent up instead of down.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.kernel_size = kernel_size
         self.stride = stride
@@ -73,7 +76,7 @@ class _MaxPoolFwdOpBase(Op):
         super().__init__(target=target)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        """Run the op on ``input``.
+        """Pool ``input``.
 
         Args:
             input: Input, $[N \\times C]$ followed by ``ndim`` spatial axes.
@@ -124,13 +127,14 @@ class MaxPool1dIndicesFwdOp(_MaxPoolFwdOpBase):
     }
 
     def forward(self, input: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run the op on the inputs the manifest declares.
+        """Pool ``input`` and return where each maximum came from.
 
         Args:
-            input: Input tensor, dtype ``float16 | bfloat16 | float32``.
+            input: ``(N, C, L_in)``, float16, bfloat16 or float32.
 
         Returns:
-            ``output``, ``indices``, as the manifest declares.
+            ``output`` ``(N, C, L_out)`` in the input dtype and ``indices``, int64 of the same
+            shape: the flat position of each maximum within its ``(n, c)`` plane.
         """
         return super().forward(input)
 
@@ -160,13 +164,14 @@ class MaxPool2dIndicesFwdOp(_MaxPoolFwdOpBase):
     }
 
     def forward(self, input: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run the op on the inputs the manifest declares.
+        """Pool ``input`` and return where each maximum came from.
 
         Args:
-            input: Input tensor, dtype ``float16 | bfloat16 | float32``.
+            input: ``(N, C, H_in, W_in)``, float16, bfloat16 or float32.
 
         Returns:
-            ``output``, ``indices``, as the manifest declares.
+            ``output`` ``(N, C, H_out, W_out)`` in the input dtype and ``indices``, int64 of the same
+            shape: the flat position of each maximum within its ``(n, c)`` plane.
         """
         return super().forward(input)
 
@@ -191,12 +196,13 @@ class MaxPool3dIndicesFwdOp(_MaxPoolFwdOpBase):
     }
 
     def forward(self, input: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run the op on the inputs the manifest declares.
+        """Pool ``input`` and return where each maximum came from.
 
         Args:
-            input: Input tensor, dtype ``float16 | bfloat16 | float32``.
+            input: ``(N, C, D_in, H_in, W_in)``, float16, bfloat16 or float32.
 
         Returns:
-            ``output``, ``indices``, as the manifest declares.
+            ``output`` ``(N, C, D_out, H_out, W_out)`` in the input dtype and ``indices``, int64 of the same
+            shape: the flat position of each maximum within its ``(n, c)`` plane.
         """
         return super().forward(input)

@@ -12,14 +12,6 @@ from tileops._kernels.kernel_base import Entry, Kernel
 from tileops._utils import WARP_LANES
 
 
-def _sort_widths(chunks: int) -> list[int]:
-    """Slots per lane of each sort width, 32 lanes times a power of two, up to ``chunks``."""
-    widths = [1]
-    while WARP_LANES * widths[-1] < chunks:
-        widths.append(widths[-1] * 2)
-    return widths
-
-
 @target_cache(maxsize=32)
 def _nsa_topk_varlen_kernel(
     seq_num: int,
@@ -65,7 +57,10 @@ def _nsa_topk_varlen_kernel(
         },
     )
     def _nsa_topk_varlen_func():
-        widths = _sort_widths(n_max)
+        # Slots per lane of each sort width, 32 lanes times a power of two, up to n_max.
+        widths = [1]
+        while WARP_LANES * widths[-1] < n_max:
+            widths.append(widths[-1] * 2)
         slots = widths[-1]
         # (exclusive floor, slots per lane) of the sort width each candidate count selects.
         bands = [(0 if i == 0 else WARP_LANES * widths[i - 1], w) for i, w in enumerate(widths)]

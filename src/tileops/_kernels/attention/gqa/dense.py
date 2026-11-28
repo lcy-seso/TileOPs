@@ -689,10 +689,6 @@ class GQADenseWSKernel(Kernel, GQADenseFwdInterface):
         """Build arguments beyond the call's shape; the two-consumer program takes none."""
         return {}
 
-    @property
-    def default_config(self) -> dict:
-        return {}
-
     def forward(
         self,
         q: torch.Tensor,
@@ -2522,8 +2518,12 @@ class GQADenseSlidingWindowKernel(Kernel, GQADenseFwdInterface):
             rope_layout=rope_layout,
             dtype=self.dtype_str,
         )
+        self.kernel = self._builder()
+        self.init_config(config)
 
-        self.kernel = _gqa_sw_fwd_wgmma_pipelined_kernel(
+    def _builder(self):
+        """The attention program's builder, which takes the configuration."""
+        return _gqa_sw_fwd_wgmma_pipelined_kernel(
             self.batch,
             self.heads,
             self.heads_kv,
@@ -2537,8 +2537,6 @@ class GQADenseSlidingWindowKernel(Kernel, GQADenseFwdInterface):
             self.dtype_str,
             has_sinks=self.has_sinks,
         )
-
-        self.init_config(config)
 
     @property
     def default_config(self) -> dict:
@@ -2585,23 +2583,20 @@ class GQADenseSlidingWindowKernel(Kernel, GQADenseFwdInterface):
         return CompiledProgram(attention), rope
 
 
-class GQADenseSlidingWindowBandKernel(Kernel, GQADenseFwdInterface):
+class GQADenseSlidingWindowBandKernel(GQADenseSlidingWindowKernel):
     """SM90 causal sliding window whose band fits two key tiles.
 
     One CTA serves a (query tile, KV head): the band's key and value tiles load once and
     serve the KV head's query heads in turn.
     """
 
-    supported_archs: list[int] = [90]
     preferred_over = frozenset({"gqa_dense_sliding_window"})
     _BAND_TILE = 128
 
     @classmethod
     def refusal(cls, call: AttentionCall) -> str | None:
         """A causal window of at most one key tile whose band fits shared memory."""
-        if call.return_lse:
-            return "does not return the log-sum-exp"
-        reason = GQADenseSlidingWindowKernel.refusal(call)
+        reason = super().refusal(call)
         if reason is not None:
             return reason
         if not call.is_causal or not 0 <= call.window_size_left <= cls._BAND_TILE:
@@ -2651,36 +2646,43 @@ class GQADenseSlidingWindowBandKernel(Kernel, GQADenseFwdInterface):
         has_sinks: bool = False,
         device_index: int | None = None,
     ) -> None:
-        super().__init__(device_index=device_index)
-        self.has_sinks = has_sinks
-        self.dtype = dtype
-        self.rope = make_dense_qk_rope_preprocessor(
-            fuse_rope=fuse_rope,
-            batch=batch,
-            heads=heads,
-            heads_kv=heads_kv,
-            seq_len_q=seq_len,
-            seq_len_kv=seq_len,
-            dim=dim,
-            max_position=max_position,
-            rotary_dim=rotary_dim,
-            rope_layout=rope_layout,
-            dtype=self.dtype_str,
-        )
-        self.kernel = _gqa_sw_fwd_packed_kernel(
+        # The band serves causal windows only, which see no key past the query.
+        super().__init__(
             batch,
             heads,
             heads_kv,
             seq_len,
             dim,
+            True,
             window_size_left,
-            self._BAND_TILE,
-            dim**-0.5 if sm_scale is None else sm_scale,
+            0,
+            dtype,
+            sm_scale,
             softcap,
-            self.dtype_str,
+            config,
+            fuse_rope=fuse_rope,
+            max_position=max_position,
+            rotary_dim=rotary_dim,
+            rope_layout=rope_layout,
             has_sinks=has_sinks,
+            device_index=device_index,
         )
-        self.init_config(config)
+
+    def _builder(self):
+        """The attention program's builder, which takes the stage count."""
+        return _gqa_sw_fwd_packed_kernel(
+            self.batch,
+            self.heads,
+            self.heads_kv,
+            self.seq_len,
+            self.dim,
+            self.window_size_left,
+            self._BAND_TILE,
+            self.sm_scale,
+            self.softcap,
+            self.dtype_str,
+            has_sinks=self.has_sinks,
+        )
 
     @property
     def default_config(self) -> dict:
@@ -2689,24 +2691,6 @@ class GQADenseSlidingWindowBandKernel(Kernel, GQADenseFwdInterface):
     @property
     def autotune_configs(self) -> list[dict]:
         return [{"num_stages": stages} for stages in (1, 2)]
-
-    def forward(
-        self,
-        q: torch.Tensor,
-        k: torch.Tensor,
-        v: torch.Tensor,
-        q_scale: torch.Tensor | None = None,
-        k_scale: torch.Tensor | None = None,
-        v_scale: torch.Tensor | None = None,
-        rope_cos: torch.Tensor | None = None,
-        rope_sin: torch.Tensor | None = None,
-        sinks: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        self._require_devices(q=q, k=k, v=v)
-        attention, rope = self.program(self._compile)
-        if rope is not None:
-            q, k = rope(q, k, rope_cos, rope_sin)
-        return attention(q, k, v, sinks if self.has_sinks else q)
 
     def _compile(self, cfg: dict) -> tuple:
         """The attention program for *cfg*, and the Q/K rotation ahead of it or ``None``."""

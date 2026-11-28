@@ -4,7 +4,11 @@ import tilelang
 import tilelang.language as T
 import torch
 
-from tileops._kernels.attention.call_spec import AttentionCall, GQADenseFwdInterface
+from tileops._kernels.attention.call_spec import (
+    AttentionCall,
+    GQADenseFwdInterface,
+    check_head_groups,
+)
 from tileops._kernels.attention.gqa.decode_bs1_common import (
     COMPILE_FLAGS,
     allocate_partials,
@@ -284,8 +288,7 @@ class GQADenseFP8DecodeKernel(Kernel, GQADenseFwdInterface):
         self.dtype = dtype
         self.sm_scale = dim**-0.5 if sm_scale is None else sm_scale
         self.softcap = softcap
-        if heads_kv <= 0 or heads % heads_kv != 0:
-            raise ValueError("heads must be divisible by heads_kv")
+        check_head_groups(heads, heads_kv)
         self.init_config(config)
         if heads // heads_kv > self.config["block_m"]:
             raise ValueError("block_m must cover every query head sharing one KV head")

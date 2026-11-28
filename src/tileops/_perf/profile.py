@@ -50,14 +50,14 @@ def tensor_core_roof(dtype) -> str:
 
     Args:
         dtype: The dtype the matmul consumes — a ``torch.dtype`` or its
-            string name. Ops pass ``self.dtype`` directly.
+            string name.
 
     Returns:
         A GPU-profile key such as ``"tensor_core.bf16"``.
 
     Raises:
-        ValueError: If *dtype* has no tensor-core section in the profile
-            schema (including ``None`` — the op has not bound a dtype yet).
+        ValueError: If *dtype* is ``None`` or has no tensor-core section in the
+            profile schema.
     """
     # Keyed by the dtype the contraction consumes. fp32 maps to tf32, the unit an fp32
     # contraction runs on when tensor cores serve it. ``resolve_roof`` decodes the key.

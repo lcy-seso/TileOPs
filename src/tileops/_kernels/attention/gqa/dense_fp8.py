@@ -9,6 +9,7 @@ from tileops._kernels.attention.call_spec import (
     ATTENTION_DTYPES,
     AttentionCall,
     GQADenseFwdInterface,
+    check_head_groups,
 )
 from tileops._kernels.attention.fp8_fa3_layouts import (
     fa3_acc_fragment,
@@ -50,8 +51,7 @@ def _gqa_fwd_fp8_bn224_tma_v_kernel(
     overlap_softmax_pv: bool,
     has_sinks: bool = False,
 ) -> Callable:
-    if heads % heads_kv != 0:
-        raise ValueError("heads must be divisible by heads_kv")
+    check_head_groups(heads, heads_kv)
     if is_causal and seq_len_q > seq_len_kv:
         raise ValueError("causal attention requires seq_len_q <= seq_len_kv")
     # Each K slot needs its own phase: sharing one release barrier would
@@ -818,8 +818,7 @@ class GQADenseFP8Kernel(Kernel, GQADenseFwdInterface):
         self.init_config(config)
 
     def _validate_spec(self) -> None:
-        if self.heads % self.heads_kv != 0:
-            raise ValueError("heads must be divisible by heads_kv")
+        check_head_groups(self.heads, self.heads_kv)
         if self.dtype not in ATTENTION_DTYPES:
             raise ValueError("native-FP8 Dense GQA outputs float16 or bfloat16")
         if self.is_causal and self.seq_len_q > self.seq_len_kv:

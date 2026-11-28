@@ -3,7 +3,6 @@ import torch
 
 from tests.cuda_graph_contract import CapturedGraph
 from tests.workload_test_base import FixtureBase, TestBase
-from tileops._utils import STR_TO_DTYPE
 from tileops.attention import TopKSelectFwdOp
 from workloads.attention.topk_select import TopKSelectWorkload
 from workloads.device import run_device
@@ -17,15 +16,17 @@ class TopKSelectTest(TopKSelectWorkload, TestBase):
 class TopKSelectFixture(FixtureBase):
     PARAMS = [
         (
-            "batch, seq_len, seq_len_kv, kv_group, topk, in_dtype_str, out_dtype_str, tune",
+            "batch, seq_len, seq_len_kv, kv_group, topk, in_dtype, out_dtype, tune",
             [
                 pytest.param(
-                    4, 256, 1024, 1, 32, "float32", "int32", False, marks=pytest.mark.smoke
+                    4, 256, 1024, 1, 32, torch.float32, torch.int32, False, marks=pytest.mark.smoke
                 ),
-                pytest.param(8, 512, 2048, 1, 64, "float32", "int32", True, marks=pytest.mark.full),
+                pytest.param(
+                    8, 512, 2048, 1, 64, torch.float32, torch.int32, True, marks=pytest.mark.full
+                ),
                 # Enough rows to skip the register kernel, past 2048 keys: 512-thread blocks.
                 pytest.param(
-                    4, 128, 8192, 1, 512, "float32", "int32", False, marks=pytest.mark.full
+                    4, 128, 8192, 1, 512, torch.float32, torch.int32, False, marks=pytest.mark.full
                 ),
                 # 8 GiB and 16 GiB of scores.
                 pytest.param(
@@ -34,8 +35,8 @@ class TopKSelectFixture(FixtureBase):
                     64 * 1024,
                     1,
                     1024,
-                    "float32",
-                    "int32",
+                    torch.float32,
+                    torch.int32,
                     False,
                     marks=pytest.mark.nightly,
                 ),  # fmt: skip
@@ -45,8 +46,8 @@ class TopKSelectFixture(FixtureBase):
                     64 * 2048,
                     1,
                     2048,
-                    "float32",
-                    "int32",
+                    torch.float32,
+                    torch.int32,
                     False,
                     marks=pytest.mark.nightly,
                 ),  # fmt: skip
@@ -62,12 +63,10 @@ def test_topk_select_op(
     seq_len_kv: int,
     kv_group: int,
     topk: int,
-    in_dtype_str: str,
-    out_dtype_str: str,
+    in_dtype: torch.dtype,
+    out_dtype: torch.dtype,
     tune: bool,
 ) -> None:
-    in_dtype = STR_TO_DTYPE[in_dtype_str]
-    out_dtype = STR_TO_DTYPE[out_dtype_str]
     test = TopKSelectTest(batch, seq_len, seq_len_kv, kv_group, topk, in_dtype, out_dtype)
     op = TopKSelectFwdOp(top_k=topk)
     if tune:

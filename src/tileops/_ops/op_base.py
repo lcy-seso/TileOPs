@@ -36,6 +36,7 @@ from tileops._ops._signature_codegen import (
     tensorless_device,
 )
 from tileops._ops.compile_boundary import instance_key, register_instance
+from tileops._perf.profile import tensor_core_roof
 from tileops._utils.device import current_device, device_context
 from tileops.backend import (
     BUILTIN,
@@ -402,7 +403,8 @@ class Op(ABC):
     assigns its manifest parameters, calls ``super().__init__(target=target)``, and writes its
     computation in ``forward``; it builds derived attributes and sub-ops after
     ``super().__init__``. It declares ``kernel_types``, ``interfaces``, ``delegate_types`` and
-    ``injected_parameters``; it may override ``dtype``, ``roof_key()``,
+    ``injected_parameters``, and ``contraction_dtype_from`` when its FLOPs are matmul
+    contractions; it may override ``dtype``, ``roof_key()``,
     ``eval_roofline_read_bytes()`` and ``roofline_data_terms()``. Callers call the op as
     ``op(...)``, never ``forward``. Each member states its contract in its own docstring or
     comment; docs/design/ops-design-reference.md describes the call protocol and the kernel
@@ -458,6 +460,11 @@ class Op(ABC):
     _MAX_PLANS: ClassVar[int] = 256
     # The generated signature plan; None for a class without a manifest entry.
     _signature: ClassVar[object] = None
+    # The generated check of the manifest parameters, which returns the indices they settle;
+    # None for a class without a manifest entry.
+    _check_construction: ClassVar[Callable[["Op"], dict] | None] = None
+    # The record of the last completed call, which ``last_call`` materializes; None before one.
+    _last_call: "_CallRecord | None" = None
     dtype: torch.dtype | None = None
     # Whether a call's tensor contents are checked against their `requires`; set by every op
     # whose signature declares `validate_inputs`.
@@ -512,7 +519,7 @@ class Op(ABC):
         Raises:
             RuntimeError: No call has completed yet.
         """
-        record = getattr(self, "_last_call", None)
+        record = self._last_call
         if record is None:
             raise RuntimeError(f"{type(self).__name__}: no call has completed yet")
         return record.materialize()
@@ -538,17 +545,15 @@ class Op(ABC):
     injected_parameters: ClassVar[tuple[str, ...]] = ()
 
     def __init__(self, *, target: Target = None) -> None:
-        """Do the part of construction every op shares, once the subclass has assigned its
-        manifest parameters.
+        """Build the op; shapes and dtypes arrive with each call. A subclass with manifest
+        parameters assigns them first and then calls this.
 
-        Loads the backend registry, checks the manifest parameters, installs the
-        implementations and registers the instance for its compile boundary. It selects and
-        builds no kernel and reads no device property: an op constructs wherever it is
-        imported, and a device it cannot run on is refused at the first call.
+        It selects and builds no kernel and reads no device property: an op constructs
+        wherever it is imported, and a device it cannot run on is refused at the first call.
 
         Args:
-            target: Which set of kernels serves this op: a target name, ``BUILTIN`` for the
-                in-tree kernels, or ``None`` to decide from the call's device.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
 
         Raises:
             ValueError: A manifest parameter is outside its signature, or an implementation
@@ -558,7 +563,7 @@ class Op(ABC):
         self.target = target
         # Before any traced region, which the first call may be inside.
         ensure_loaded()
-        check = getattr(type(self), "_check_construction", None)
+        check = type(self)._check_construction
         if check is not None:
             self._construction_indices = check(self)
         self._install_kernel_types()
@@ -643,15 +648,24 @@ class Op(ABC):
         """
         return {}
 
+    # The signature tensor, or dtype index, that holds the dtype this op's matmul
+    # contractions consume; None for an op whose FLOPs run on CUDA cores.
+    contraction_dtype_from: ClassVar[str | None] = None
+
     def roof_key(self) -> str:
         """GPU-profile key of the compute unit whose peak bounds ``eval_roofline()``'s FLOPs
-        (docs/design/roofline.md §1.2).
+        (docs/design/roofline.md §1.4).
 
-        It names the unit of the optimal implementation, never the running kernel's. The
-        default is fp32 CUDA cores; an op whose FLOPs are matmul contractions overrides it with
-        ``tensor_core_roof`` of the contraction's input dtype from ``self.last_call``.
+        It names the unit of the optimal implementation, never the running kernel's: the
+        tensor cores of the last call's ``contraction_dtype_from`` dtype when the op names
+        one, else fp32 CUDA cores. An op whose unit depends on its state overrides it.
         """
-        return "cuda_core.fp32"
+        name = self.contraction_dtype_from
+        if name is None:
+            return "cuda_core.fp32"
+        call = self.last_call
+        dtype = call.tensors[name][1] if name in call.tensors else call.indices[name]
+        return tensor_core_roof(dtype)
 
     def _install_kernel_types(self) -> None:
         """Install the implementation of each key, from ``kernel_types`` or a backend.

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import tilelang.language as T
 
 from tileops._kernels.constants import VECTOR_ACCESS_BYTES
+from tileops._kernels.streaming_load import load16, load16_evict_first
 from tileops._kernels.warp_reduce import warp_reduce
 from tileops._utils import WARP_LANES, WARP_SHUFFLE_STAGES
 
@@ -57,19 +58,9 @@ def load_vector(dst, slot, src, at, vec: int, evict_first: bool):
     if vec == 1:
         dst[slot, 0] = src[at]
     elif evict_first:
-        T.call_extern(
-            "handle",
-            "tileops::load16_evict_first",
-            T.address_of(dst[slot, 0]),
-            T.address_of(src[at]),
-        )
+        load16_evict_first(dst, (slot, 0), src, at)
     else:
-        T.call_extern(
-            "handle",
-            "tileops::load16",
-            T.address_of(dst[slot, 0]),
-            T.address_of(src[at]),
-        )
+        load16(dst, (slot, 0), src, at)
 
 
 @T.macro

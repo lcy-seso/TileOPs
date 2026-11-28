@@ -1,8 +1,6 @@
 """Concatenation along one axis: every input copied into its columns of the output rows."""
 
-import dataclasses
 import math
-from abc import abstractmethod
 from typing import ClassVar
 
 import tilelang
@@ -12,12 +10,12 @@ from tvm import DataType
 
 from tileops._csrc import csrc_include
 from tileops._kernels.build_target import target_cache
-from tileops._kernels.call_spec import CallSpec
 from tileops._kernels.constants import MAX_GRID_YZ_BLOCKS, VECTOR_ACCESS_BYTES
-from tileops._kernels.kernel_base import Entry, Kernel, KernelInterface
+from tileops._kernels.indexing.call_spec import ConcatCall, ConcatFwdInterface
+from tileops._kernels.kernel_base import Entry, Kernel
 from tileops._kernels.streaming_load import load16_evict_last
 
-__all__ = ["ConcatCall", "ConcatFwdInterface", "ConcatKernel"]
+__all__ = ["ConcatKernel"]
 
 # The inputs one launch copies: `_concat_kernel` declares that many tensor slots, x0 to x3,
 # and `ConcatKernel.forward` groups the inputs by it.
@@ -36,40 +34,6 @@ assert _GROUP == 2 * _LANES
 # Groups a thread of the widening program reads, one CTA width apart, before its first
 # conversion, so the second group's row lookup overlaps the first read.
 _WIDEN_PER_THREAD = 2
-
-
-@dataclasses.dataclass(frozen=True)
-class ConcatCall(CallSpec):
-    """The joined axis, each input's row width and dtype, and the output dtype.
-
-    An input's row width is the product of its extents from ``dim`` on: the contiguous run of
-    elements it holds for one index of the axes before ``dim``.
-    """
-
-    dim: int = 0
-    widths: tuple[int, ...] = ()
-    dtypes: tuple[torch.dtype, ...] = ()
-    out_dtype: torch.dtype | None = None
-
-
-class ConcatFwdInterface(KernelInterface):
-    """Tensors joined along one axis into a new tensor."""
-
-    request = ConcatCall
-
-    @abstractmethod
-    def forward(self, tensors: list[torch.Tensor]) -> torch.Tensor:
-        """Join *tensors* along ``call.dim``.
-
-        Args:
-            tensors: Contiguous tensors on ``call.device`` of one rank, equal in every axis
-                but ``call.dim``. Element ``j`` has dtype ``call.dtypes[j]`` and row width
-                ``call.widths[j]``.
-
-        Returns:
-            A new contiguous tensor in ``call.out_dtype``: each input converted to it and
-            placed after the previous inputs along ``call.dim``.
-        """
 
 
 @target_cache(maxsize=64)

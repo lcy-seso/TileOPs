@@ -50,6 +50,7 @@ from tileops._kernels.elementwise.bitwise import (
     BitwiseXorBoolStorageFwdKernel,
     BitwiseXorFwdKernel,
 )
+from tileops._kernels.elementwise.call_spec import DropoutCall, DropoutFwdInterface
 from tileops._kernels.elementwise.clamp import ClampFwdKernel, ClampTensorFwdKernel
 from tileops._kernels.elementwise.comparison import (
     AlwaysFalseFwdKernel,
@@ -70,7 +71,7 @@ from tileops._kernels.elementwise.comparison import (
     NeBoolStorageFwdKernel,
     NeFwdKernel,
 )
-from tileops._kernels.elementwise.dropout import DropoutCall, DropoutFwdInterface, DropoutKernel
+from tileops._kernels.elementwise.dropout import DropoutKernel
 from tileops._kernels.elementwise.logical import (
     LogicalAndBoolStorageFwdKernel,
     LogicalAndFwdKernel,

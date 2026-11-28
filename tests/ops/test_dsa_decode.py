@@ -4,7 +4,7 @@ import torch
 from tests.cuda_graph_contract import CapturedGraph
 from tests.workload_test_base import FixtureBase, TestBase, op_preferring
 from tileops._kernels.attention import DSADecodeBasicKernel, DSADecodeKernel, DSADecodeWSKernel
-from tileops._utils import get_sm_version
+from tileops._utils import device_facts
 from tileops.attention import DSADenseFwdOp
 from tileops.backend import OpNotAvailableError
 from workloads.attention.dsa import DSADecodeWorkload
@@ -265,7 +265,7 @@ def test_dsa_decode_ignores_keys_past_the_causal_limit(
 )
 def test_dsa_decode_row_normalization(kernel, row) -> None:
     """Every kernel zeroes a row with no valid key and normalizes a very negative score."""
-    if get_sm_version() not in kernel.supported_archs:
+    if device_facts().arch not in kernel.supported_archs:
         pytest.skip(f"{kernel.__name__} does not run on this device")
 
     class Pinned(kernel):

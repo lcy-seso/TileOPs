@@ -5,7 +5,8 @@ from typing import ClassVar
 
 import torch
 
-from tileops._kernels.elementwise.dropout import DropoutCall, DropoutFwdInterface, DropoutKernel
+from tileops._kernels.elementwise.call_spec import DropoutCall, DropoutFwdInterface
+from tileops._kernels.elementwise.dropout import DropoutKernel
 from tileops._kernels.kernel_base import Kernel, KernelInterface
 from tileops._ops.op_base import Op
 from tileops.backend import Target

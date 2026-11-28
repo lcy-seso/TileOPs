@@ -11,7 +11,7 @@ import warnings
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from tileops._kernels.autotune import TUNING_FATAL
+from tileops._kernels.autotune import TUNING_FATAL, autotune
 from tileops._kernels.linear_attention.v_tile import (
     fit_launches,
     min_gemm_n_threads,
@@ -27,6 +27,7 @@ __all__ = [
     "delta_rule_fwd_autotune_configs",
     "h_block_v_candidates",
     "tune_delta_rule_fwd",
+    "tune_program",
 ]
 
 # ``num_stages`` / ``threads`` candidates for the recurrence; the preparation takes their
@@ -355,3 +356,17 @@ def tune_delta_rule_fwd(
         "o_threads": _tuned_value(o_config, "threads", default["o_threads"]),
     }
     return config
+
+
+def tune_program(
+    kernel, jit: Callable, configs: list[dict], untuned: dict, warmup: int, rep: int
+) -> dict:
+    """Sweep one of *kernel*'s programs over *configs* and its *untuned* config, and return
+    the winning config. The first candidate seeds the JIT parameters the autotuner binds,
+    which stay out of its cache key."""
+    configs = kernel.tuning_candidates(configs, untuned)
+    options = dict(configs=configs, warmup=warmup, rep=rep)
+    seeds = list(kernel._autotune_initial_kwargs(jit, configs[0]))
+    if seeds:
+        options["do_not_specialize"] = seeds
+    return kernel._call_autotuned_kernel(autotune(**options)(jit), jit, configs[0]).config

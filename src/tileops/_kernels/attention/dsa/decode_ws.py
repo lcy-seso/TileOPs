@@ -942,10 +942,6 @@ class DSADecodeWSKernel(DSADecodeKernelBase):
         )  # fmt: skip
         return kernel
 
-    @property
-    def default_config(self) -> dict:
-        return {}
-
     def forward(
         self,
         q: torch.Tensor,

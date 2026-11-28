@@ -10,6 +10,7 @@ from tileops._kernels.kernel_base import Entry, Kernel
 from tileops._kernels.linear_attention.call_spec import (
     GDNCall,
     GDNFwdInterface,
+    build_entry,
     head_count_refusal,
 )
 from tileops._kernels.linear_attention.delta_decode import decode_launch, delta_decode_tl
@@ -60,30 +61,9 @@ class GDNDenseDecodeFwdKernel(Kernel, GDNFwdInterface):
 
     @classmethod
     def entry_for(cls, call: GDNCall) -> Entry:
-        index = call.device_index
-        # A packed call's token count is runtime data; an equal-length one's is built in.
-        tokens = 1 if call.varlen else call.seq_len
-        identity = (
-            call.num_sequences,
-            call.heads,
-            call.value_heads,
-            call.dim_k,
-            call.scale,
-            call.dtype,
-            call.has_initial_state,
-            call.state_v_first,
-            call.l2norm,
-            call.gate_in_kernel,
-            call.beta_sigmoid,
-            call.allow_neg_eigval,
-            call.pooled,
-            call.rollback,
-            call.varlen,
-            tokens,
-            call.drafts,
-            index,
-        )
-        return identity, lambda: cls(
+        return build_entry(
+            cls,
+            call,
             batch=call.num_sequences,
             heads=call.heads,
             value_heads=call.value_heads,
@@ -99,9 +79,9 @@ class GDNDenseDecodeFwdKernel(Kernel, GDNFwdInterface):
             pooled=call.pooled,
             rollback=call.rollback,
             varlen=call.varlen,
-            tokens=tokens,
+            # A packed call's token count is runtime data; an equal-length one's is built in.
+            tokens=1 if call.varlen else call.seq_len,
             drafts=call.drafts,
-            device_index=index,
         )
 
     def __init__(
@@ -231,7 +211,7 @@ class GDNDenseDecodeFwdKernel(Kernel, GDNFwdInterface):
 
 
 @target_cache(maxsize=32)
-@tilelang.jit(out_idx=[6, 7], pass_configs={"tl.enable_fast_math": True})
+@tilelang.jit(out_idx=[6, 7], pass_configs={tilelang.PassConfigKey.TL_ENABLE_FAST_MATH: True})
 def _gdn_decode_column_kernel(batch_size, heads, scale, neg_eigval):
     # A block keeps a 16-column tile of the 128-row state in registers; a thread owns
     # pairs of adjacent columns.

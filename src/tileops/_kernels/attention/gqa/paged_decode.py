@@ -16,6 +16,7 @@ import torch
 from tileops._kernels.attention.call_spec import (
     AttentionCall,
     MHAPagedDecodeFwdInterface,
+    check_head_groups,
 )
 from tileops._kernels.attention.online_softmax import (
     make_apply_softcap,
@@ -537,8 +538,7 @@ class MHADecodePagedKernel(Kernel, MHAPagedDecodeFwdInterface):
         device_index: int | None = None,
     ):
         super().__init__(device_index=device_index)
-        if heads_kv <= 0 or heads % heads_kv != 0:
-            raise ValueError("heads must be a positive multiple of heads_kv")
+        check_head_groups(heads, heads_kv)
         if seqlen_q <= 0:
             raise ValueError("seqlen_q must be positive")
         if seqlen_kv <= 0 or page_size <= 0 or seqlen_kv % page_size != 0:

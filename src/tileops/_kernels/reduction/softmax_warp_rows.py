@@ -14,7 +14,7 @@ import torch
 
 from tileops._csrc import csrc_include
 from tileops._kernels.build_target import target_cache
-from tileops._kernels.constants import VECTOR_ACCESS_BYTES
+from tileops._kernels.constants import SM_RESIDENT_BLOCKS, VECTOR_ACCESS_BYTES
 from tileops._kernels.reduction._primitives import (
     exp_shifted,
     exp_shifted_scaled,
@@ -24,7 +24,7 @@ from tileops._kernels.reduction.call_spec import SoftmaxCall
 from tileops._kernels.reduction.softmax import _PlannedSoftmaxKernel
 from tileops._kernels.streaming_load import load16, load16_evict_last
 from tileops._kernels.warp_reduce import warp_reduce
-from tileops._utils import RESIDENT_CTAS, WARP_LANES
+from tileops._utils import WARP_LANES
 
 __all__ = ["SoftmaxWarpRowsKernel"]
 
@@ -141,7 +141,7 @@ class SoftmaxWarpRowsKernel(_PlannedSoftmaxKernel):
             self.dtype_to_str(call.out_dtype),
             lanes=lanes,
             per_lane=per_lane,
-            warps=-(-threads // (WARP_LANES * RESIDENT_CTAS[call.arch])),
+            warps=-(-threads // (WARP_LANES * SM_RESIDENT_BLOCKS[call.arch])),
             keep=keeps_input_rows(call),
         )
         self.init_config(None)

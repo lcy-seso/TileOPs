@@ -8,7 +8,6 @@ import operator
 import tilelang
 import tilelang.language as T
 import torch
-from tvm import DataType
 
 from tileops._kernels.build_target import target_cache
 from tileops._kernels.constants import VECTOR_ACCESS_BYTES
@@ -70,7 +69,9 @@ def _layer_norm_kernel(M, N, eps, dtype, has_weight, has_bias, sm_count):
             and N_padded // threads % 2 == 0
         )
 
-        walk_vec = math.gcd(N_padded // threads, VECTOR_ACCESS_BYTES // (DataType(dtype).bits // 8))
+        walk_vec = math.gcd(
+            N_padded // threads, VECTOR_ACCESS_BYTES // getattr(torch, dtype).itemsize
+        )
         walk_steps = N_padded // (threads * walk_vec)
         warps = threads // WARP_LANES
         warp_ranks = list(range(warps))

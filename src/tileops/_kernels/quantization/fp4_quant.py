@@ -1,15 +1,13 @@
-import dataclasses
 import math
-from abc import abstractmethod
 
 import tilelang
 import tilelang.language as T
 import torch
 
 from tileops._kernels.build_target import target_cache
-from tileops._kernels.call_spec import CallSpec
 from tileops._kernels.constants import VECTOR_ACCESS_BYTES
-from tileops._kernels.kernel_base import Entry, Kernel, KernelInterface
+from tileops._kernels.kernel_base import Entry, Kernel
+from tileops._kernels.quantization.call_spec import FP4QuantCall, FP4QuantFwdInterface
 from tileops._kernels.quantization.group_quant import (
     LAUNCH_CONFIG,
     exponent_scale,
@@ -22,53 +20,7 @@ from tileops._kernels.quantization.group_quant import (
     write_in_place,
 )
 
-__all__ = ["FP4QuantCall", "FP4QuantFwdInterface", "FP4QuantKernel"]
-
-
-@dataclasses.dataclass(frozen=True)
-class FP4QuantCall(CallSpec):
-    """One per-block e2m1 quantization of a ``[*S, n]`` tensor, blocks of ``block_size``
-    columns.
-
-    The leading axes ``*S`` are not part of the call: one kernel serves any token count.
-    """
-
-    n: int = 0
-    block_size: int = 32
-    dtype: torch.dtype = torch.bfloat16
-    inplace: bool = False
-
-
-class FP4QuantFwdInterface(KernelInterface):
-    """Block-wise quantization to e2m1 under power-of-two scales."""
-
-    request = FP4QuantCall
-
-    @abstractmethod
-    def forward(
-        self, input_tensor: torch.Tensor
-    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        """Scale each block by the power of two its maximum rounds up to, and round to e2m1.
-
-        A block is ``call.block_size`` adjacent columns of the last axis. Its scale is
-        ``2 ** ceil(log2(m * r))``, ``m`` the block's absolute maximum floored at
-        ``6 * 2 ** -126`` and ``r`` the float32 nearest ``1 / 6``; each element's code is
-        ``x / scale`` clamped to ``[-6, 6]`` and rounded to the nearest e2m1 value, ties to
-        the even code, its sign kept for a zero. A block holding an infinity or a NaN has no
-        defined result. Nothing but *input_tensor* under ``call.inplace`` is written in
-        place, and no output aliases the input.
-
-        Args:
-            input_tensor: ``[*S, call.n]`` in ``call.dtype`` on ``call.device``, contiguous;
-                with ``call.inplace``, of any layout.
-
-        Returns:
-            ``(q, scale)`` on ``call.device``: new contiguous ``uint8`` ``[*S, call.n // 2]``
-            codes, two a byte with the even column in the low nibble, and new contiguous
-            ``float8_e8m0fnu`` ``[*S, call.n // call.block_size]`` scales. With
-            ``call.inplace``, *input_tensor* is overwritten with each element's e2m1 value
-            times its scale and ``(None, None)`` returns.
-        """
+__all__ = ["FP4QuantKernel"]
 
 
 def _e2m1_step(bits):

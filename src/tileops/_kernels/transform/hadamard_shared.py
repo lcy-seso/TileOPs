@@ -16,6 +16,7 @@ import torch
 
 from tileops._kernels.build_target import target_cache
 from tileops._kernels.kernel_base import CompiledProgram, Entry
+from tileops._kernels.tiling import align_up
 from tileops._kernels.transform.call_spec import HadamardTransformCall
 from tileops._kernels.transform.hadamard_register import (
     PASS_CONFIGS,
@@ -169,7 +170,7 @@ def _rows_per_cta(n: int) -> int:
 
 def _shared_rows_threads(n: int, rows: int) -> int:
     """One thread an 8-element chunk, up to a full block."""
-    return min(1024, max(32, -(-(rows * n // 8) // 32) * 32))
+    return min(1024, max(32, align_up(rows * n // 8, 32)))
 
 
 class HadamardSharedRowsKernel(HadamardKernel):

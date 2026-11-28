@@ -2,10 +2,12 @@
 
 import tilelang
 import tilelang.language as T
+import torch
 from tvm import DataType
 
 from tileops._csrc import csrc_include
 from tileops._kernels.build_target import target_cache
+from tileops._kernels.constants import VECTOR_ACCESS_BYTES
 from tileops._kernels.elementwise._broadcast import (
     broadcast_plan_for,
     compute_broadcast_offsets,
@@ -96,7 +98,7 @@ def make_unary_regcopy(N, dtype, op_name, out_dtype, headers, full_occupancy):
     A ``GuardedOpFunc`` body runs its fast form, and the full body only in a thread where
     the guard fails.
     """
-    vec = 16 // (DataType(dtype).bits // 8)
+    vec = VECTOR_ACCESS_BYTES // getattr(torch, dtype).itemsize
 
     @tilelang.jit(out_idx=[1], compile_flags=_compile_flags(headers))
     def kernel(threads_arg, npt_arg):
@@ -210,7 +212,7 @@ def _row_broadcast_prim(
     rows = N_total // inner
     a_inner = plan.a_strides[-1]
     b_inner = plan.b_strides[-1]
-    lanes = 128 // DataType(dtype).bits
+    lanes = VECTOR_ACCESS_BYTES // getattr(torch, dtype).itemsize
     full_strides = (inner, 1)
     bias_operand = (
         "b"
@@ -900,7 +902,7 @@ def make_binary_register_copy(N_total, dtype, op_name, out_dtype, headers):
         # the guarded loops below walk it in that order. A ragged last block, or a
         # thread holding part of a vector, has no such layout; it runs the body per
         # element instead.
-        lanes = min(num_per_thread, 128 // DataType(dtype).bits)
+        lanes = min(num_per_thread, VECTOR_ACCESS_BYTES // getattr(torch, dtype).itemsize)
         chunks = num_per_thread // lanes
         whole = N_total % block_size == 0 and num_per_thread % lanes == 0
         fast = _fast_of(op_func) if whole else None
@@ -1206,9 +1208,9 @@ def make_strided_multi_input(
     """
     inner = coalesced_shape[-1]
     divisors = row_major_strides(coalesced_shape)
-    widest = max(DataType(dt).bits for dt in (*dtypes, out_dtype)) // 8
+    widest = max(getattr(torch, dt).itemsize for dt in (*dtypes, out_dtype))
     vec = 1
-    while vec * 2 <= min(num_per_thread, 16 // widest) and inner % (vec * 2) == 0:
+    while vec * 2 <= min(num_per_thread, VECTOR_ACCESS_BYTES // widest) and inner % (vec * 2) == 0:
         vec *= 2
     chunks = num_per_thread // vec
     block_size = threads * num_per_thread

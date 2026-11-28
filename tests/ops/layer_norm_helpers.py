@@ -5,7 +5,7 @@ import torch
 from tilelang import tvm
 
 from tileops._kernels.norm._config import make_raw_sums_hold
-from tileops._utils import WARP_LANES, get_sm_count, get_sm_version
+from tileops._utils import WARP_LANES, device_facts
 
 
 def far_case(rows, n, kernel, dtype, row, mark):
@@ -24,8 +24,8 @@ def outlier_case(rows, n, kernel, leads, mark):
 def outlier_rows(rows) -> int:
     """Rows of a case: *rows* itself, rows an SM when a float, or one CTA past a full wave."""
     if rows == "wave+1":
-        return get_sm_count() + 1
-    return int(rows * get_sm_count()) if isinstance(rows, float) else rows
+        return device_facts().sm_count + 1
+    return int(rows * device_facts().sm_count) if isinstance(rows, float) else rows
 
 
 def assert_raw_sums_fail(x: torch.Tensor) -> None:
@@ -44,7 +44,7 @@ def warp_leads(held, m: int, n: int, dtype: torch.dtype) -> tuple:
     """Each warp's first element in every cluster CTA's share of a row, as *held*, a
     `LayerNormHeldKernel`-like class, places *m* rows of *n*: the elements its warps take
     their first sums less."""
-    sm_count, arch = get_sm_count(), get_sm_version()
+    sm_count, arch = device_facts().sm_count, device_facts().arch
     cluster = held._cluster(n, dtype, m, arch, sm_count)
     vec = held._vec(n, dtype, cluster)
     threads = held._threads(n, cluster, vec, m, sm_count)
@@ -59,7 +59,7 @@ def check_held_launch(held, kernel: str, m: int, n: int, dtype: torch.dtype) -> 
     """Assert that *held*'s rule places *m* rows of *n* as *kernel* names: "held" alone on
     its SM, "queued" with CTAs queued, "split" or "queued-split" likewise across a cluster,
     "fragment" past a thread's registers; skip a split where clusters do not exist."""
-    sm_count, arch = get_sm_count(), get_sm_version()
+    sm_count, arch = device_facts().sm_count, device_facts().arch
     cluster = held._cluster(n, dtype, m, arch, sm_count)
     if "split" in kernel and arch < 90:
         pytest.skip("a row splits across a cluster on SM90 only")

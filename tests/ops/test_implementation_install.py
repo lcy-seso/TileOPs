@@ -8,7 +8,7 @@ import torch
 from tests.workload_test_base import TestBase
 from tileops._ops.elementwise import AlibiFwdOp, SinusoidalFwdOp
 from tileops._ops.elementwise._base import ELEMENTWISE
-from tileops._utils import forget_device_properties, get_sm_version
+from tileops._utils import device_facts, forget_device_properties
 from tileops.backend import BUILTIN, OpNotAvailableError
 from tileops.backend import _registry as registry
 from tileops.backend._registry import register_kernel_type
@@ -63,7 +63,7 @@ def test_auto_discovered_incompatible_kernel_is_refused_at_first_call() -> None:
     from tileops._kernels.gemm import GEMMCall
     from tileops.gemm import GEMMFwdOp
 
-    incompatible_archs = [a for a in (70, 75, 80, 86, 89, 90, 100) if a != get_sm_version()]
+    incompatible_archs = [a for a in (70, 75, 80, 86, 89, 90, 100) if a != device_facts().arch]
 
     class AutoDiscoveredIncompatibleOp(GEMMFwdOp):
         # Inside tileops: a class defined elsewhere cannot subclass an op of tileops.

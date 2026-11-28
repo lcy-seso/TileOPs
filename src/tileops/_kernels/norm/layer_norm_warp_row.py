@@ -10,7 +10,6 @@ import operator
 import tilelang
 import tilelang.language as T
 import torch
-from tvm import DataType
 
 from tileops._kernels.build_target import target_cache
 from tileops._kernels.constants import VECTOR_ACCESS_BYTES
@@ -26,7 +25,7 @@ __all__ = ["LayerNormWarpRowKernel"]
 
 @target_cache(maxsize=32)
 def _layer_norm_warp_row_kernel(M, N, eps, dtype, has_weight, has_bias):
-    vec = VECTOR_ACCESS_BYTES // (DataType(dtype).bits // 8)
+    vec = VECTOR_ACCESS_BYTES // getattr(torch, dtype).itemsize
     vectors = N // vec
     per_lane = -(-vectors // WARP_LANES)  # vectors a lane reads; the last may be past the row
     # A chain's adds, two to fold the four chains pairwise, and the warp's shuffle rounds.

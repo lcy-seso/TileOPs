@@ -9,6 +9,7 @@ from tileops._kernels.build_target import CUDA_COMPILE_FLAGS, target_cache
 from tileops._kernels.constants import VECTOR_ACCESS_BYTES
 from tileops._kernels.pool.call_spec import AvgPool3dFwdInterface
 from tileops._kernels.pool.common import ACCUM_DTYPE, AvgPoolKernelBase, AvgPoolWindow
+from tileops._kernels.streaming_load import load16_evict_last
 
 __all__ = ["AvgPool3dKernel"]
 
@@ -219,11 +220,8 @@ def _avg_pool3d_wide_kernel(window: AvgPoolWindow, dtype: str):
             a group is a whole 16-byte vector."""
             for g in T.serial(groups):
                 if whole_vector:
-                    T.call_extern(
-                        "handle",
-                        "tileops::load16_evict_last",
-                        T.address_of(held[base + g * vector_elems]),
-                        T.address_of(x[row, d, h, left + g * vector_elems]),
+                    load16_evict_last(
+                        held, base + g * vector_elems, x, (row, d, h, left + g * vector_elems)
                     )
                 else:
                     for v in T.vectorized(vector_elems):

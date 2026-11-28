@@ -158,7 +158,10 @@ def _ssd_chunk_state_fwd_kernel(
 
 
 @target_cache(maxsize=32)
-@tilelang.jit(out_idx=[5], pass_configs={"tl.enable_aggressive_shared_memory_merge": True})
+@tilelang.jit(
+    out_idx=[5],
+    pass_configs={tilelang.PassConfigKey.TL_ENABLE_AGGRESSIVE_SHARED_MEMORY_MERGE: True},
+)
 def _ssd_chunk_state_tma_kernel(batch, chunks, heads, has_seq_idx, dtype):
     """Use 128-token TMA panels and a contiguous FP32 state write on Hopper, for one B group."""
     chunk, d_head, d_state, panel = 256, 64, 128, 128

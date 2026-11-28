@@ -33,7 +33,7 @@ def _min_p_mask_kernel(batch: int, vocab: int, dtype: str, threads: int, parts: 
 
     ``parts == 1`` leaves a row's maximum in the block that read it and takes no barrier.
     """
-    itemsize = torch.empty((), dtype=getattr(torch, dtype)).element_size()
+    itemsize = getattr(torch, dtype).itemsize
     vec = vector_width(vocab, itemsize)
     grid = batch * parts
 

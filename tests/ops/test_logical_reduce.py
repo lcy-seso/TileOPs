@@ -154,9 +154,9 @@ def test_logical_reduce_edge_axes_in_own_layout(op_kind: str, dtype: torch.dtype
 def test_logical_reduce_edge_axes_fused_dispatch(
     op_kind: str, dtype: torch.dtype, tune: bool
 ) -> None:
-    from tileops._utils import device_calibration
+    from tileops._utils import device_facts
 
-    if device_calibration() is None:
+    if device_facts().calibration is None:
         pytest.skip("fused edge logical reduce is selected only on a calibrated board")
 
     op = _OPS[op_kind](dim=[0, 2], target=BUILTIN)

@@ -29,6 +29,7 @@ from tileops._kernels.pool.common import (
     max_pool_out,
     register_plane_refusal,
 )
+from tileops._kernels.streaming_load import load16_evict_first, load16_evict_last
 
 __all__ = ["MaxPool2dIndicesRegisterKernel", "MaxPool2dRegisterKernel"]
 
@@ -69,6 +70,8 @@ def _max_pool2d_register_kernel(
         compile_flags=csrc_include("streaming_load.h"),
     )
     def build():
+        load = {"evict_first": load16_evict_first, "evict_last": load16_evict_last}.get(load_policy)
+
         def column(start, i):
             """The column of ``window[i]``, a column past the plane read at its edge."""
             return T.max(T.min(start - pad_w + i, w_in - 1), 0)
@@ -92,12 +95,7 @@ def _max_pool2d_register_kernel(
             for kh in T.unroll(kernel_h):
                 row = T.max(T.min(oh * stride_h - pad_h + kh, h_in - 1), 0)
                 if load_policy != "default":
-                    T.call_extern(
-                        "handle",
-                        f"tileops::load16_{load_policy}",
-                        T.address_of(values[0]),
-                        T.address_of(x[plane, row, start]),
-                    )
+                    load(values, 0, x, (plane, row, start))
                 else:
                     for i in T.vectorized(run):
                         values[i] = x[plane, row, start + i]

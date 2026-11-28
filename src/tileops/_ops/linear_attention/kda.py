@@ -14,7 +14,6 @@ from tileops._kernels.linear_attention import (
     KDARecurrentDecodeFwdKernel,
 )
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = ["KDAFwdOp"]
@@ -56,6 +55,8 @@ class KDAFwdOp(Op):
     ``num_accepted_tokens``, other state widths and the other calls still require
     an external target implementation.
     """
+
+    contraction_dtype_from = "q"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "kda_chunk_prefill": KDAChunkPrefillFwdKernel,
@@ -100,7 +101,8 @@ class KDAFwdOp(Op):
                 and that ``state_indices`` and ``num_accepted_tokens`` lie in their manifest
                 ranges.
                 It synchronizes the device; leave it off under CUDA Graph capture.
-            target: Backend target, or ``None`` to resolve from the input device.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.scale = scale
         self.use_qk_l2norm_in_kernel = use_qk_l2norm_in_kernel
@@ -111,10 +113,6 @@ class KDAFwdOp(Op):
         self.lower_bound = lower_bound
         self.validate_inputs = validate_inputs
         super().__init__(target=target)
-
-    def roof_key(self) -> str:
-        """The state contractions are priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])
 
     def forward(
         self,

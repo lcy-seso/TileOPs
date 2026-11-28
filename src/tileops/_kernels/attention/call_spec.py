@@ -45,9 +45,16 @@ __all__ = [
     "PagedKVCacheWriteCall",
     "PagedKVCacheWriteFwdInterface",
     "SparseMLADecodeFwdInterface",
+    "check_head_groups",
 ]
 
 ATTENTION_DTYPES = (torch.float16, torch.bfloat16)
+
+
+def check_head_groups(heads: int, heads_kv: int) -> None:
+    """Raise ``ValueError`` unless *heads* is a positive multiple of *heads_kv*."""
+    if heads_kv <= 0 or heads % heads_kv != 0:
+        raise ValueError(f"heads ({heads}) must be a positive multiple of heads_kv ({heads_kv})")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -101,6 +108,11 @@ class AttentionCall(CallSpec):
         }
 
     @property
+    def whole_head_groups(self) -> bool:
+        """Whether every KV head serves the same positive number of query heads."""
+        return self.heads_kv > 0 and self.heads % self.heads_kv == 0
+
+    @property
     def uses_sliding_window(self) -> bool:
         """Whether either window bound is set, which restricts what may serve the call."""
         return self.window_size_left != -1 or self.window_size_right != -1
@@ -152,9 +164,7 @@ class AttentionCall(CallSpec):
             self.batch == 1 and self.dtype in dtypes and self.dim in dims and self.softcap == 0.0
         ):
             return False
-        if self.heads_kv <= 0 or self.heads % self.heads_kv != 0:
-            return False
-        return 1 <= self.heads // self.heads_kv <= 64
+        return self.whole_head_groups and 1 <= self.heads // self.heads_kv <= 64
 
     @property
     def paged_decode_refusal(self) -> str | None:

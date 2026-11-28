@@ -21,7 +21,6 @@ from tileops._kernels.moe import (
     IndexedWeightedReduceKernel,
 )
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = ["IndexedExpertMLPFwdOp"]
@@ -34,6 +33,8 @@ class IndexedExpertMLPFwdOp(Op):
     Routes that share an expert read its weights once, so the roofline prices one weight
     read per distinct expert. Suited to calls with few routes per expert.
     """
+
+    contraction_dtype_from = "D"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "route_stats": IndexedRouteStatsKernel,
@@ -69,9 +70,6 @@ class IndexedExpertMLPFwdOp(Op):
         from tileops._perf.formulas import routed_active_experts
 
         return {"active_experts": routed_active_experts(self.last_call)}
-
-    def roof_key(self) -> str:
-        return tensor_core_roof(self.last_call.indices["D"])
 
     def forward(
         self,

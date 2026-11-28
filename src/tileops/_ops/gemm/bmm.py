@@ -47,25 +47,14 @@ class BMMFwdOp(Op):
     compiles a kernel on first use. The in-tree kernels need $K$ to be a multiple of 16.
     """
 
+    contraction_dtype_from = "T"
+
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "bmm_pingpong": BMMPingPongKernel,
         "bmm_persistent": BMMPersistentKernel,
         "bmm": BMMKernel,
     }
     interfaces: ClassVar[Mapping[str, type[KernelInterface]]] = {"bmm": BMMFwdInterface}
-
-    def __init__(
-        self,
-        *,
-        target: Target = None,
-    ) -> None:
-        """Build the op. Shapes and dtypes are taken from the first call.
-
-        Args:
-            target: Which set of kernels serves this op — a target name, ``BUILTIN``
-                for the in-tree kernels, or ``None`` to decide from the input device.
-        """
-        super().__init__(target=target)
 
     def forward(
         self, a: torch.Tensor, b: torch.Tensor, *, out: torch.Tensor | None = None
@@ -98,10 +87,6 @@ class BMMFwdOp(Op):
         )
         return kernel(a, b, out)
 
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.indices["T"])
-
 
 class BMMFP8FwdOp(Op):
     """Batched FP8 GEMM: ``d[i] = (a[i] @ b[i]) * a_scale * b_scale``.
@@ -113,6 +98,8 @@ class BMMFP8FwdOp(Op):
     first transposed into a new buffer (one extra read and write of ``b``), because FP8
     WGMMA reads ``b`` only K-innermost. The in-tree kernel needs $K$ to be a multiple of 32.
     """
+
+    contraction_dtype_from = "T"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "bmm_fp8_ws": BMMFP8WSKernel,
@@ -233,10 +220,6 @@ class BMMFP8FwdOp(Op):
             return kernel(b_nk.transpose(-2, -1))
         return b_nk.contiguous()
 
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.indices["T"])
-
 
 class BMMW8A16FwdOp(Op):
     """Batched W8A16 NT GEMM: $d_i = a_i \\mathbin{@} \\hat{w}_i^{\\top}$ for $i \\in [0, B)$.
@@ -255,19 +238,6 @@ class BMMW8A16FwdOp(Op):
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {"bmm_w8a16": BMMW8A16Kernel}
     interfaces: ClassVar[Mapping[str, type[KernelInterface]]] = {"bmm_w8a16": BMMW8A16FwdInterface}
-
-    def __init__(
-        self,
-        *,
-        target: Target = None,
-    ) -> None:
-        """Build the op. Shapes are taken from the first call.
-
-        Args:
-            target: Which set of kernels serves this op — a target name, ``BUILTIN``
-                for the in-tree kernels, or ``None`` to decide from the input device.
-        """
-        super().__init__(target=target)
 
     def forward(
         self,

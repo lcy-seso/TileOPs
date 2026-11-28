@@ -598,10 +598,10 @@ class GroupedGEMMConfigMixin:
 
     The kernel class defines ``_CONFIG_KEYS`` (``block_m``, ``block_n``, ``num_stages`` and
     ``num_sms`` first), their domains ``_BLOCK_M``, ``_BLOCK_N`` and ``_NUM_STAGES``,
-    ``config_refusal(config, **inputs)``, ``_refusal_inputs()`` (the device and layout facts
-    ``config_refusal`` takes beside the config) and ``_tuning_operands(rows, device)`` (``a``,
+    ``config_refusal(config, **inputs)`` and ``_tuning_operands(rows, device)`` (``a``,
     ``a_scale``, ``b`` and ``b_scale`` for rows of shape ``rows``), and sets ``call``,
-    ``sm_count`` and ``kernel`` before configuring.
+    ``sm_count``, ``scale_k``, ``smem_limit``, ``alignment`` and ``kernel`` before
+    configuring.
     """
 
     _CONFIG_KEYS: tuple[str, ...]
@@ -636,7 +636,25 @@ class GroupedGEMMConfigMixin:
         return None
 
     def _refusal_inputs(self) -> dict:
-        raise NotImplementedError
+        """The device and layout facts ``config_refusal`` takes beside the config."""
+        return {
+            "sm_count": self.sm_count,
+            "smem_limit": self.smem_limit,
+            "scale_k": self.scale_k,
+            "alignment": self.alignment,
+        }
+
+    def _legal(self, configs: list[dict]) -> list[dict]:
+        """The *configs* ``config_refusal`` accepts."""
+        inputs = self._refusal_inputs()
+        return [config for config in configs if self.config_refusal(config, **inputs) is None]
+
+    def _stages_for(self, footprint: Callable[[int], int]) -> list[int]:
+        """Ring depths whose shared memory *footprint* fits ``smem_limit``, those dividing the
+        K steps when any do."""
+        fitting = [s for s in self._NUM_STAGES if footprint(s) <= self.smem_limit]
+        dividing = [s for s in fitting if self.scale_k % s == 0]
+        return dividing or fitting
 
     def _check_config(self, config: Mapping[str, object]) -> None:
         """Validate a launch configuration against device and layout limits."""

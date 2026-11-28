@@ -476,12 +476,12 @@ def _conv2d_symmetric_kernel(
     stride: int,
     pad: int,
     dilation: int,
+    out_h: int,
+    out_w: int,
     has_bias: bool,
     dtype: str,
 ):
     accum_dtype = "float"
-    out_h = (h + 2 * pad - dilation * (kernel_size - 1) - 1) // stride + 1
-    out_w = (w + 2 * pad - dilation * (kernel_size - 1) - 1) // stride + 1
     out_hw = out_h * out_w
     k_total = c_in * kernel_size * kernel_size
 
@@ -793,6 +793,8 @@ class Conv2dSymmetricKernel(Kernel, Conv2dFwdInterface):
             call.stride[0],
             call.padding[0],
             call.dilation[0],
+            call.out_h,
+            call.out_w,
             call.has_bias,
             self.dtype_str,
         )

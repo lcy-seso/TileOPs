@@ -58,7 +58,7 @@ def _bmm_kernel(batch: int, m: int, n: int, k: int, dtype: str = "float16") -> C
 
     @tilelang.jit(
         out_idx=[],
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16"],
     )
     def _bmm_func(
@@ -187,7 +187,7 @@ def _bmm_fp8_kernel(
         out_idx=[-1],
         pass_configs={
             tilelang.PassConfigKey.TL_ENABLE_FAST_MATH: True,
-            "tl.disable_warp_specialized": False,
+            tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: False,
         },
         compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16"],
     )
@@ -293,7 +293,7 @@ def _bmm_fp8_persistent_kernel(
         out_idx=[-1],
         pass_configs={
             tilelang.PassConfigKey.TL_ENABLE_FAST_MATH: True,
-            "tl.disable_warp_specialized": True,
+            tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True,
         },
         compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16"],
     )
@@ -383,7 +383,7 @@ def _bmm_fp8_persistent_ws_kernel(
         pass_configs={
             tilelang.PassConfigKey.TL_ENABLE_FAST_MATH: True,
             tilelang.PassConfigKey.TL_DISABLE_THREAD_STORAGE_SYNC: True,
-            "tl.disable_warp_specialized": True,
+            tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True,
         },
         compile_flags=["-O3", "-DENABLE_BF16"],
     )

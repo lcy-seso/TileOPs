@@ -291,21 +291,8 @@ def packed_dense_call(q, k, v, o, do, lse) -> tuple:
     )
 
 
-class _MLABwdKernelBase(Kernel):
-    """The three launches of one backward call; the subclasses differ in layout only."""
-
-    supported_archs: list[int] = [90]
-    general: bool = True
-
-    @classmethod
-    def refusal(cls, call: MLABwdCall) -> str | None:
-        if call.dtype not in ATTENTION_DTYPES:
-            return f"runs float16 and bfloat16, got {call.dtype}"
-        if call.dim_qk % 16 != 0 or call.dim_v % 16 != 0:
-            return (
-                f"contracts every head dimension in 16-wide steps, got {call.dim_qk}, {call.dim_v}"
-            )
-        return super().refusal(call)
+class _MLABwdBase(Kernel):
+    """The construction both MLA backward implementations share."""
 
     @classmethod
     def entry_for(cls, call: MLABwdCall) -> Entry:
@@ -345,18 +332,38 @@ class _MLABwdKernelBase(Kernel):
         self.is_causal = is_causal
         self.dtype = dtype
         self.scale = dim_qk**-0.5 if sm_scale is None else sm_scale
+        self.init_config(config)
+
+
+class _MLABwdKernelBase(_MLABwdBase):
+    """The three launches of one backward call; the subclasses differ in layout only."""
+
+    supported_archs: list[int] = [90]
+    general: bool = True
+
+    @classmethod
+    def refusal(cls, call: MLABwdCall) -> str | None:
+        if call.dtype not in ATTENTION_DTYPES:
+            return f"runs float16 and bfloat16, got {call.dtype}"
+        if call.dim_qk % 16 != 0 or call.dim_v % 16 != 0:
+            return (
+                f"contracts every head dimension in 16-wide steps, got {call.dim_qk}, {call.dim_v}"
+            )
+        return super().refusal(call)
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
         self.kernel = _bwd_kernel(
-            batch,
-            heads,
-            dim_qk,
-            dim_v,
-            seqlen_q,
-            seqlen_kv,
-            is_causal,
+            self.batch,
+            self.heads,
+            self.dim_qk,
+            self.dim_v,
+            self.seqlen_q,
+            self.seqlen_kv,
+            self.is_causal,
             self.scale,
             self.dtype_str,
         )
-        self.init_config(config)
 
     @property
     def default_config(self) -> dict:

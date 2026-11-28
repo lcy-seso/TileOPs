@@ -21,7 +21,7 @@ from tileops._kernels.norm import (
 )
 from tileops._ops.norm.ada_layer_norm import AdaLayerNormFwdOp
 from tileops._ops.norm.ada_layer_norm_zero import AdaLayerNormZeroFwdOp
-from tileops._utils import get_sm_count
+from tileops._utils import device_facts
 from tileops.backend import BUILTIN
 from workloads.norm import (
     AdaLayerNormFarFromZeroWorkload,
@@ -225,7 +225,7 @@ def test_ada_layer_norm_fragment_prefetches_rows_with_an_outlier_lead(gated) -> 
     op = op_preferring(op_cls, "ada_layer_norm_prefetched", Prefetched)
     n = 3000
     test_cls = AdaLayerNormZeroOutlierLeadTest if gated else AdaLayerNormOutlierLeadTest
-    test = test_cls(2 * get_sm_count(), n, torch.float32, leads=(0,))
+    test = test_cls(2 * device_facts().sm_count, n, torch.float32, leads=(0,))
     inputs = test.gen_inputs()
     assert_raw_sums_fail(inputs[0])
     test.check(op, *inputs)

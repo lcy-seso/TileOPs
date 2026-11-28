@@ -8,7 +8,7 @@ import torch
 from tileops._kernels.elementwise import AlibiFwdKernel
 from tileops._kernels.elementwise.call_spec import AlibiCall, AlibiFwdInterface
 from tileops._kernels.kernel_base import KernelInterface
-from tileops._ops.elementwise._base import generated_on
+from tileops._ops._signature_codegen import tensorless_device
 from tileops._ops.op_base import Op
 from tileops.backend import Target
 
@@ -67,7 +67,7 @@ class AlibiFwdOp(Op):
         kernel = self.kernel_for(
             "alibi",
             lambda: AlibiCall(
-                device=generated_on(self),
+                device=tensorless_device(self),
                 seq_len=self.seq_len,
                 num_heads=self.num_heads,
                 dtype=self.out_dtype,

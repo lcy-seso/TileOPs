@@ -62,12 +62,6 @@ READ_BOUND_EXCEPTIONS: dict = {
 }
 
 
-def _op_class(op_name: str, entry: dict):
-    from tileops.manifest._registry import op_class
-
-    return op_class(op_name, entry)
-
-
 def _call(op_name: str, entry: dict, row: dict, case: dict):
     """One row and dtype case of an entry, instantiated."""
     from tileops.manifest import load_adts
@@ -79,9 +73,11 @@ def _call(op_name: str, entry: dict, row: dict, case: dict):
 
 def _case(op_name: str, entry: dict, row: dict, case: dict):
     """(op, positional inputs, keyword inputs) built from the instantiated call alone."""
+    from tileops.manifest import op_class
+
     call = _call(op_name, entry, row, case)
     tensors = call.materialize("cuda")
-    op = _op_class(op_name, entry)(**call.arguments())
+    op = op_class(op_name, entry)(**call.arguments())
     args, keywords = call.signature.forward_arguments(tensors[t] for t in call.signature.inputs)
     return op, args, keywords
 

@@ -13,10 +13,9 @@ import torch
 from tests.manifest_calls import implemented_ops
 from tileops._ops._signature_codegen import CheckError
 from tileops.backend import OpNotAvailableError
-from tileops.manifest import load_adts, load_manifest
+from tileops.manifest import load_adts, load_manifest, op_class
 from tileops.manifest._kinds import split_union
 from tileops.manifest._plan import check_entry, entry_plan
-from tileops.manifest._registry import op_class
 from tileops.manifest._values import ADTValue, convert
 from tileops.manifest._workload import instantiate
 

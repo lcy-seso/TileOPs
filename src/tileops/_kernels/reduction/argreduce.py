@@ -14,7 +14,11 @@ import torch
 
 from tileops._csrc import csrc_include
 from tileops._kernels.build_target import target_cache
-from tileops._kernels.constants import STATIC_SHARED_BYTES, VECTOR_ACCESS_BYTES
+from tileops._kernels.constants import (
+    SM_RESIDENT_BLOCKS,
+    STATIC_SHARED_BYTES,
+    VECTOR_ACCESS_BYTES,
+)
 from tileops._kernels.kernel_base import CompiledProgram, Kernel
 from tileops._kernels.reduction._primitives import (
     FRAGMENT_ELEMS_PER_THREAD,
@@ -24,7 +28,7 @@ from tileops._kernels.reduction._primitives import (
 from tileops._kernels.reduction.call_spec import ArgreduceCall, ArgreduceFwdInterface
 from tileops._kernels.streaming_load import load16
 from tileops._kernels.tiling import align_up
-from tileops._utils import RESIDENT_CTAS, WARP_LANES
+from tileops._utils import WARP_LANES, WARP_SHUFFLE_STAGES
 from tileops.manifest.primitives import ceil_div
 
 __all__ = ["ArgreduceKernel", "ArgreduceSplitKernel", "ArgreduceStridedKernel"]
@@ -156,7 +160,7 @@ def _make_block_reduce(
         warp = tx // WARP_LANES
 
         ops.merge_accumulators(keys, indices, best_key, best_index, num_accumulators)
-        ops.warp_reduce(best_key, best_index, WARP_LANES.bit_length() - 1, WARP_LANES)
+        ops.warp_reduce(best_key, best_index, WARP_SHUFFLE_STAGES, WARP_LANES)
 
         if lane == 0:
             warp_keys[warp] = best_key[0]
@@ -169,7 +173,7 @@ def _make_block_reduce(
             best_index[0] = warp_indices[lane]
 
         if warp == 0:
-            ops.warp_reduce(best_key, best_index, WARP_LANES.bit_length() - 1, WARP_LANES)
+            ops.warp_reduce(best_key, best_index, WARP_SHUFFLE_STAGES, WARP_LANES)
 
     return block_reduce
 
@@ -477,7 +481,6 @@ def _argreduce_multicta_partial_kernel(
 def _argreduce_multicta_final_kernel(
     M: int,
     N: int,
-    op_kind: str,
     ctas_per_row: int,
 ):
     """Build the final reduction over per-row block partials."""
@@ -518,7 +521,7 @@ def _argreduce_multicta_final_kernel(
                             partial_indices[row * ctas_per_row + partial],
                         )
 
-                ops.warp_reduce(best_key, best_index, WARP_LANES.bit_length() - 1, WARP_LANES)
+                ops.warp_reduce(best_key, best_index, WARP_SHUFFLE_STAGES, WARP_LANES)
                 if row < M and lane == 0:
                     out[row] = T.cast(best_index[0], "int64")
 
@@ -656,7 +659,7 @@ class ArgreduceKernel(_ArgreduceKernelBase):
         registers = align_up(4 * vectors + 2 * self._NUM_ACCUMULATORS + 4, 8)
         warps = 4 * (self._regs_per_sm // 4 // (registers * WARP_LANES))
         ctas = min(
-            RESIDENT_CTAS[self._arch],
+            SM_RESIDENT_BLOCKS[self._arch],
             self._threads_per_sm // threads,
             warps // (threads // WARP_LANES),
         )
@@ -731,9 +734,7 @@ class ArgreduceSplitKernel(_ArgreduceKernelBase):
         """The per-block partials *cfg* splits each row into, then their merge."""
         ctas_per_row = cfg.get("ctas_per_row", 1)
         partial = CompiledProgram(self.kernel(cfg["threads"], ctas_per_row))
-        final = CompiledProgram(
-            _argreduce_multicta_final_kernel(self.M, self.N, self.op_kind, ctas_per_row)()
-        )
+        final = CompiledProgram(_argreduce_multicta_final_kernel(self.M, self.N, ctas_per_row)())
 
         def launch(x: torch.Tensor) -> torch.Tensor:
             return final(*partial(x))

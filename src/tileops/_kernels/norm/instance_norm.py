@@ -272,7 +272,7 @@ def _instance_norm_train_kernel(
         has_bias: Whether ``bias`` is read; otherwise the shift is zero.
     """
     accum_dtype = "float32"
-    D_padded = row_padding(D, 4 if dtype == "float32" else 2)
+    D_padded = row_padding(D, getattr(torch, dtype).itemsize)
     unbiased = D / (D - 1)
 
     @tilelang.jit(out_idx=[6], compile_flags=csrc_include("streaming_load.h"))
@@ -289,7 +289,7 @@ def _instance_norm_train_kernel(
         # slower replicated layout.
         row_threads = threads // block_m
         vector = math.gcd(
-            D_padded // row_threads, VECTOR_ACCESS_BYTES // (4 if dtype == "float32" else 2)
+            D_padded // row_threads, VECTOR_ACCESS_BYTES // getattr(torch, dtype).itemsize
         )
         row_layout = T.Fragment(
             [block_m, D_padded],

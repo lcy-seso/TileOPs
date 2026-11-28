@@ -14,11 +14,14 @@ import operator
 import tilelang
 import tilelang.language as T
 import torch
-from tvm import DataType
 
 from tileops._csrc import csrc_include
 from tileops._kernels.build_target import target_cache
-from tileops._kernels.constants import STATIC_SHARED_BYTES, VECTOR_ACCESS_BYTES
+from tileops._kernels.constants import (
+    SM_RESIDENT_BLOCKS,
+    STATIC_SHARED_BYTES,
+    VECTOR_ACCESS_BYTES,
+)
 from tileops._kernels.kernel_base import Entry, Kernel
 from tileops._kernels.norm._config import rms_scale, select_row_config, select_row_configs
 from tileops._kernels.norm.call_spec import (
@@ -28,13 +31,10 @@ from tileops._kernels.norm.call_spec import (
     whole_row_refusal,
     whole_row_scale_refusal,
 )
-from tileops._kernels.streaming_load import load16, load16_evict_last
+from tileops._kernels.streaming_load import load16, load16_evict_first, load16_evict_last
 from tileops._kernels.tiling import ALIGNMENT, align_up
 from tileops._kernels.warp_reduce import warp_reduce
-from tileops._utils import (
-    RESIDENT_CTAS,
-    WARP_LANES,
-)
+from tileops._utils import WARP_LANES
 
 __all__ = ["RMSNormKernel", "RMSNormPairedKernel", "RMSNormTwoPassKernel"]
 
@@ -265,12 +265,7 @@ def _two_pass_row(M, N, eps, dtype, has_weight, threads, vec, chunk, blocks, tre
             for s in walk(steps // chunk):
                 for k in T.unroll(chunk):
                     at = ((s * chunk + k) * threads + tx) * vec
-                    T.call_extern(
-                        "handle",
-                        "tileops::load16_evict_first",
-                        T.address_of(held[k * vec]),
-                        T.address_of(x[row, at]),
-                    )
+                    load16_evict_first(held, k * vec, x, (row, at))
                     if has_weight and not weight_first:
                         for c in T.vectorized(vec):
                             scale[k * vec + c] = weight[at + c]
@@ -357,7 +352,7 @@ def _warp_rows(M, N, eps, dtype, has_weight, lanes, per_lane, warps, rows, zero_
 @target_cache(maxsize=32)
 def _rms_norm_kernel(M, N, N_padded, eps, dtype, has_weight, sm_count, smem_budget, zero_centered):
     col_guard = N_padded != N
-    elem_bytes = DataType(dtype).bits // 8
+    elem_bytes = getattr(torch, dtype).itemsize
 
     vec = VECTOR_ACCESS_BYTES // elem_bytes
     body = _row_body(N, N_padded, elem_bytes)
@@ -546,7 +541,7 @@ class RMSNormKernel(Kernel, RMSNormFwdInterface):
             # The fewest threads a block whose resident-block cap still fills the SM's threads;
             # block_m does not apply.
             target = self.build_target
-            config["threads"] = target.threads_per_sm // RESIDENT_CTAS[target.arch]
+            config["threads"] = target.threads_per_sm // SM_RESIDENT_BLOCKS[target.arch]
         elif self.N_padded <= self._SHARED_ROW_MAX:
             # 2048 elements a block: two 16-byte accesses a thread.
             config["block_m"] = 2048 // self.N_padded
@@ -702,7 +697,7 @@ class _RMSNormRowsKernel(Kernel, RMSNormFwdInterface):
 def _rms_norm_paired_kernel(
     M, N, eps, dtype, has_weight, threads_per_sm, resident_ctas, zero_centered
 ):
-    elem_bytes = DataType(dtype).bits // 8
+    elem_bytes = getattr(torch, dtype).itemsize
     threads = _paired_width(N, elem_bytes)
     # Where the resident-block cap, not the SM's threads, bounds the blocks, the block asks
     # for the cap: unbounded, ptxas takes more registers than the cap's blocks leave a thread
@@ -744,7 +739,7 @@ class RMSNormPairedKernel(_RMSNormRowsKernel):
         threads = _paired_width(call.n, call.dtype.itemsize)
         if threads is None:
             return f"a row of {call.n} is not two vectors a thread of 64 to 256 threads"
-        per_sm = min(call.threads_per_sm // threads, RESIDENT_CTAS[call.arch])
+        per_sm = min(call.threads_per_sm // threads, SM_RESIDENT_BLOCKS[call.arch])
         wave = per_sm * call.sm_count
         warp_held = call.n * call.dtype.itemsize <= (
             _WARP_ROW_VECTORS * WARP_LANES * VECTOR_ACCESS_BYTES
@@ -769,7 +764,7 @@ class RMSNormPairedKernel(_RMSNormRowsKernel):
             self.dtype_str,
             has_weight,
             target.threads_per_sm,
-            RESIDENT_CTAS[target.arch],
+            SM_RESIDENT_BLOCKS[target.arch],
             self.zero_centered,
         )
         return kernel(**cfg)
@@ -777,7 +772,7 @@ class RMSNormPairedKernel(_RMSNormRowsKernel):
 
 @target_cache(maxsize=32)
 def _rms_norm_two_pass_kernel(M, N, eps, dtype, has_weight, threads_per_sm):
-    elem_bytes = DataType(dtype).bits // 8
+    elem_bytes = getattr(torch, dtype).itemsize
     vec = VECTOR_ACCESS_BYTES // elem_bytes
     shape_threads, chunk, blocks, paired = _two_pass_shape(N, elem_bytes, threads_per_sm)
 

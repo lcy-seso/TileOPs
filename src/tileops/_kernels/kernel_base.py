@@ -18,10 +18,6 @@ __all__ = ["CompiledProgram", "Entry", "Kernel", "KernelInterface", "dynamic_ext
 # builds share to be the same entry, and the thunk that produces it.
 Entry = tuple[Hashable, Callable[[], object]]
 
-# Sentinel for ``tune_jit_kernel(supply_prog=...)``: inherit the whole-kernel
-# supplier. Distinct from ``None``, which means "no supplier".
-_INHERIT_SUPPLY_PROG = object()
-
 
 def _symbols(adapter: Any) -> dict:
     """What binds each of the program's dynamic symbols, keyed by symbol name."""
@@ -233,6 +229,9 @@ class Kernel(ABC):
         "threads_arg": "threads",
         "npt_arg": "num_per_thread",
     }
+    # Sentinel for ``tune_jit_kernel(supply_prog=...)``: inherit the whole-kernel
+    # supplier. Distinct from ``None``, which means "no supplier".
+    _INHERIT_SUPPLY_PROG = object()
 
     def __init__(self, *args: object, device_index: "int | None" = None, **kwargs: object) -> None:
         self.device_index = device_index
@@ -745,7 +744,7 @@ class Kernel(ABC):
         autotune_kwargs: dict[str, Any] = dict(configs=configs, warmup=warmup, rep=rep)
         if seeds:
             autotune_kwargs["do_not_specialize"] = list(seeds)
-        if supply_prog is _INHERIT_SUPPLY_PROG:
+        if supply_prog is self._INHERIT_SUPPLY_PROG:
             supply_prog = self.autotune_supply_prog
         if supply_prog is not None:
             autotune_kwargs["supply_prog"] = supply_prog

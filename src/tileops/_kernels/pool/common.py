@@ -10,6 +10,7 @@ import torch
 from tileops._kernels.constants import STATIC_SHARED_BYTES, VECTOR_ACCESS_BYTES
 from tileops._kernels.kernel_base import Kernel
 from tileops._kernels.pool.call_spec import AdaptivePool2dCall, AvgPoolCall, MaxPoolCall
+from tileops._kernels.tiling import align_up
 
 # Every pool kernel reduces its windows in fp32 and casts back at the store: a narrow
 # accumulator loses the low bits of a wide window's sum.
@@ -79,15 +80,12 @@ def window_span(
         elements staged in all.
     """
 
-    def round_up(value: int, step: int) -> int:
-        return ((value + step - 1) // step) * step
-
     vector_elems = VECTOR_ACCESS_BYTES // getattr(torch, dtype).itemsize
     while vector_elems > 1 and (l_in % vector_elems or step % vector_elems):
         vector_elems //= 2
-    head = round_up(pad_l, vector_elems)
+    head = align_up(pad_l, vector_elems)
     reach = head + (tile_outputs - 1) * stride_l + dilation_l * (kernel_l - 1) + 1
-    return WindowSpan(vector_elems, head, round_up(reach, vector_elems))
+    return WindowSpan(vector_elems, head, align_up(reach, vector_elems))
 
 
 def pool_output_dim(

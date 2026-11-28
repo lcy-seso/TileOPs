@@ -22,7 +22,6 @@ from tileops._ops.attention.gqa.parameters import (
     score_softcap,
 )
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = ["GQAVarlenFwdOp"]
@@ -52,6 +51,8 @@ class GQAVarlenFwdOp(Op):
     checks them on every call at the cost of a device synchronization and cannot run
     inside CUDA Graph capture.
     """
+
+    contraction_dtype_from = "q"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "gqa_varlen": GQAPrefillVarlenFwdKernel,
@@ -101,7 +102,8 @@ class GQAVarlenFwdOp(Op):
             rotary_dim: Even rotated width; ``None`` uses the full head dimension.
             rope_layout: ``"neox"`` or ``"interleaved"``.
             validate_inputs: Check cumulative offsets against packed tensors on the CPU.
-            target: Backend target, or ``None`` to resolve from the input device.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.is_causal = is_causal
         self.sm_scale = sm_scale
@@ -114,10 +116,6 @@ class GQAVarlenFwdOp(Op):
         self.rope_layout = rope_layout
         self.validate_inputs = validate_inputs
         super().__init__(target=target)
-
-    def roof_key(self) -> str:
-        """Varlen attention's contractions are priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])
 
     def _varlen_call(self, inputs: tuple[torch.Tensor | None, ...]) -> AttentionCall:
         """Describe one packed call using tensor shapes and Op semantics."""

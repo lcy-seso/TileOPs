@@ -172,8 +172,10 @@ def test_a_failed_tuning_or_build_publishes_nothing(monkeypatch):
 def test_a_decode_sweep_where_no_candidate_compiles_publishes_nothing(monkeypatch):
     """A real tuning sweep that times no candidate leaves the published generation."""
     import tileops._kernels.linear_attention.gla.recurrent as recurrent
+    from tileops._kernels.linear_attention.call_spec import GLADecodeCall
 
-    kernel = recurrent.GLADecodeFP32Kernel(1, 2, 64, 64, 0.125)
+    call = GLADecodeCall(batch=1, heads=2, dim_k=64, dim_v=64, scale=0.125, dtype=torch.float32)
+    kernel = recurrent.GLADecodeFP32Kernel(call)
     published = kernel._generation
     monkeypatch.setattr(recurrent, "_gla_decode_fp32_tl", _raising)
     kernel.autotune(warmup=1, rep=1)

@@ -1,4 +1,4 @@
-"""XOR-butterfly reduction across the lanes of a warp, shared by the norm and reduction kernels."""
+"""XOR-butterfly reduction across the lanes of a warp."""
 
 import tilelang.language as T
 

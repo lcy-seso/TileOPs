@@ -1080,7 +1080,7 @@ def _grouped_gemm_kernel(spec: GroupedGEMMSpec):
         out_idx=[],
         pass_configs={
             tilelang.PassConfigKey.TL_DISABLE_THREAD_STORAGE_SYNC: True,
-            "tl.disable_warp_specialized": True,
+            tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True,
         },
         compile_flags=compile_flags,
     )

@@ -28,6 +28,8 @@ from tileops._kernels.quantization.int8_codes import (
     quantize,
     widen,
 )
+from tileops._kernels.streaming_load import load16, load16_evict_first
+from tileops._kernels.tiling import align_up
 from tileops._kernels.warp_reduce import warp_reduce
 from tileops._utils import WARP_LANES
 
@@ -94,7 +96,7 @@ def _quantize_rows(
     exact = aligned and threads * vpt == k // vec
     assert group == 1 or (exact and vpt % group == 0)
     warps = threads // WARP_LANES
-    load = "tileops::load16_evict_first" if evict_first else "tileops::load16"
+    load = load16_evict_first if evict_first else load16
 
     def slot(j, tx):
         return ((j // group) * threads + tx) * group + j % group
@@ -202,12 +204,7 @@ def _quantize_rows(
                             else:
                                 values[j, c] = w[(v0 + slot(j, tx)) * vec + c]
                 else:
-                    T.call_extern(
-                        "handle",
-                        load,
-                        T.address_of(values[j, 0]),
-                        T.address_of(w[(v0 + slot(j, tx)) * vec]),
-                    )
+                    load(values, (j, 0), w, (v0 + slot(j, tx)) * vec)
 
     @T.macro
     def fold_row(acc, values, xs, div, rcp, tx, v0, count, lo, hi, ieee: bool):
@@ -289,11 +286,8 @@ def _quantize_rows(
                 if exact or slot(j, tx) < window(bx)[1]:
                     if aligned:
                         for h in T.unroll(vec // smooth_vec):
-                            T.call_extern(
-                                "handle",
-                                "tileops::load16",
-                                T.address_of(div[j, h * smooth_vec]),
-                                T.address_of(smooth[slot(j, tx) * vec + h * smooth_vec]),
+                            load16(
+                                div, (j, h * smooth_vec), smooth, slot(j, tx) * vec + h * smooth_vec
                             )
                     else:
                         for c in T.unroll(vec):
@@ -458,7 +452,7 @@ class INT8QuantPerChannelFwdKernel(_INT8QuantPerRowKernel, INT8QuantPerChannelFw
     def config_for(self, vpt: int, pair: bool, evict_first: bool, min_blocks: int) -> dict:
         """The launch holding about ``vpt`` vectors per thread."""
         threads = -(-self._span // vpt)
-        threads = -(-threads // WARP_LANES) * WARP_LANES
+        threads = align_up(threads, WARP_LANES)
         if threads > self._WIDE_THREADS:
             threads = MAX_BLOCK_THREADS
         vpt = -(-self._span // threads)
@@ -528,7 +522,7 @@ class SmoothQuantFwdKernel(_INT8QuantPerRowKernel, SmoothQuantFwdInterface):
     ) -> dict:
         """The launch holding about ``vpt`` vectors per thread and ``rows_per_cta`` rows."""
         threads = -(-self._span // vpt)
-        threads = min(-(-threads // WARP_LANES) * WARP_LANES, MAX_BLOCK_THREADS)
+        threads = min(align_up(threads, WARP_LANES), MAX_BLOCK_THREADS)
         vpt = -(-self._span // threads)
         vec = VECTOR_ACCESS_BYTES // self.dtype.itemsize
         exact = self.cols % vec == 0 and threads * vpt == self.cols // vec

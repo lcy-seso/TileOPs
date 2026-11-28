@@ -14,7 +14,6 @@ from tileops._kernels.linear_attention import (
     DeltaNetFwdInterface,
 )
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = ["DeltaNetFwdOp"]
@@ -42,6 +41,8 @@ class DeltaNetFwdOp(Op):
     not apply a sigmoid or another beta transform.
     """
 
+    contraction_dtype_from = "q"
+
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "deltanet_dense_decode": DeltaNetDenseDecodeFwdKernel,
         "deltanet_dense_prefill": DeltaNetDensePrefillFwdKernel,
@@ -65,17 +66,13 @@ class DeltaNetFwdOp(Op):
             validate_inputs: Check on the CPU that ``cu_seqlens`` (and
                 ``cu_seqlens_cpu``) start at 0, never decrease and end at ``S``.
                 It synchronizes the device; leave it off under CUDA Graph capture.
-            target: Backend target, or ``None`` to resolve from the input
-                device.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.scale = scale
         self.use_qk_l2norm_in_kernel = use_qk_l2norm_in_kernel
         self.validate_inputs = validate_inputs
         super().__init__(target=target)
-
-    def roof_key(self) -> str:
-        """The state contractions are priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])
 
     def forward(
         self,

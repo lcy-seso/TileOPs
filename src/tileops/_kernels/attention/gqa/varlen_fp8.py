@@ -14,7 +14,7 @@ import tilelang.language as T
 import torch
 
 from tileops._csrc import csrc_include
-from tileops._kernels.attention.call_spec import ATTENTION_DTYPES, AttentionCall
+from tileops._kernels.attention.call_spec import ATTENTION_DTYPES, AttentionCall, check_head_groups
 from tileops._kernels.attention.fp8_fa3_layouts import (
     fa3_acc_fragment,
     fa3_qk_acc_column,
@@ -72,8 +72,7 @@ def _gqa_varlen_fp8_fwd_kernel(
 ) -> Callable:
     score_scale = dim**-0.5 if sm_scale is None else sm_scale
     use_softcap = softcap > 0.0
-    if heads % heads_kv != 0:
-        raise ValueError("heads must be divisible by heads_kv")
+    check_head_groups(heads, heads_kv)
     groups = heads // heads_kv
     accum_dtype = "float"
 
@@ -1138,10 +1137,6 @@ class GQAVarlenFP8FwdKernel(VarlenKernel):
             v_scale,
             sinks if self.has_sinks else self._unused_sinks,
         )
-
-    def _compile(self, cfg: dict):
-        """The program for *cfg*."""
-        return self.kernel(cfg["block_m"], cfg["block_n"], cfg["num_stages"], cfg["threads"])
 
 
 class GQAVarlenFP8WSFwdKernel(GQAVarlenFP8FwdKernel):

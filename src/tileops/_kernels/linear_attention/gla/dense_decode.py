@@ -15,10 +15,10 @@ import torch
 from tileops._kernels.build_target import CUDA_COMPILE_FLAGS, target_cache
 from tileops._kernels.constants import LOG2E
 from tileops._kernels.kernel_base import Entry, Kernel
+from tileops._kernels.linear_attention.call_spec import build_entry
 from tileops._kernels.linear_attention.gla.call_spec import (
     GLACall,
     GLAFwdInterface,
-    build_entry,
     dense_refusal,
 )
 from tileops._utils import WARP_LANES
@@ -149,6 +149,8 @@ class GLADenseDecodeFwdKernel(Kernel, GLAFwdInterface):
         return build_entry(
             cls,
             call,
+            scale=call.scale,
+            dtype=call.dtype,
             batch=call.batch,
             heads=call.heads,
             dim_k=call.dim_k,

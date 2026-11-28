@@ -35,7 +35,11 @@ if _SRC not in sys.path:
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tileops.manifest import _load_yaml, _types_document  # noqa: E402
+from tileops.manifest import (  # noqa: E402
+    _load_yaml,
+    _types_document,
+    op_class,
+)
 from tileops.manifest._plan import check_adts as _check_adts  # noqa: E402
 from tileops.manifest._plan import check_entry as _check_signature  # noqa: E402
 from tileops.manifest._plan import (  # noqa: E402
@@ -45,7 +49,6 @@ from tileops.manifest._plan import (  # noqa: E402
 from tileops.manifest._plan import (  # noqa: E402
     signature_schema_errors as _signature_schema_errors,
 )
-from tileops.manifest._registry import op_class  # noqa: E402
 from tileops.manifest._signature import (  # noqa: E402
     SLOT_TYPES,
     SignatureError,

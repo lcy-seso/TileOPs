@@ -10,7 +10,6 @@ from tileops._kernels.elementwise.call_spec import ElementwiseCall, WhereFwdInte
 from tileops._kernels.kernel_base import KernelInterface
 from tileops._ops.elementwise._base import ELEMENTWISE
 from tileops._ops.op_base import Op
-from tileops.backend import Target
 
 
 class WhereFwdOp(Op):
@@ -24,19 +23,6 @@ class WhereFwdOp(Op):
 
     kernel_types = {"where": WhereFwdKernel}
     interfaces: ClassVar[Mapping[str, type[KernelInterface]]] = {ELEMENTWISE: WhereFwdInterface}
-
-    def __init__(
-        self,
-        *,
-        target: Target = None,
-    ):
-        """Build the op. Shapes and dtype are taken from the first call.
-
-        Args:
-            target: Which set of kernels serves this op — a target name, ``BUILTIN`` for
-                the in-tree kernels, or ``None`` to decide from the input device.
-        """
-        super().__init__(target=target)
 
     def forward(
         self,

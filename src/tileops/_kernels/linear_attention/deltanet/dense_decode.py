@@ -6,6 +6,7 @@ from tileops._kernels.kernel_base import Entry, Kernel
 from tileops._kernels.linear_attention.call_spec import (
     DeltaNetCall,
     DeltaNetFwdInterface,
+    build_entry,
     head_count_refusal,
 )
 from tileops._kernels.linear_attention.delta_decode import decode_launch, delta_decode_tl
@@ -54,18 +55,9 @@ class DeltaNetDenseDecodeFwdKernel(Kernel, DeltaNetFwdInterface):
 
     @classmethod
     def entry_for(cls, call: DeltaNetCall) -> Entry:
-        index = call.device_index
-        identity = (
-            call.batch,
-            call.heads,
-            call.dim_k,
-            call.scale,
-            call.dtype,
-            call.l2norm,
-            call.has_initial_state,
-            index,
-        )
-        return identity, lambda: cls(
+        return build_entry(
+            cls,
+            call,
             batch=call.batch,
             heads=call.heads,
             dim=call.dim_k,
@@ -73,7 +65,6 @@ class DeltaNetDenseDecodeFwdKernel(Kernel, DeltaNetFwdInterface):
             dtype=call.dtype,
             l2norm=call.l2norm,
             has_initial_state=call.has_initial_state,
-            device_index=index,
         )
 
     def __init__(

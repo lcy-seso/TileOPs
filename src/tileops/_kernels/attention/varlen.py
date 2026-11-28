@@ -4,7 +4,11 @@ from collections.abc import Callable
 
 import torch
 
-from tileops._kernels.attention.call_spec import AttentionCall, GQAVarlenFwdInterface
+from tileops._kernels.attention.call_spec import (
+    AttentionCall,
+    GQAVarlenFwdInterface,
+    check_head_groups,
+)
 from tileops._kernels.attention.varlen_rope import VarlenKeyRoPE
 from tileops._kernels.kernel_base import Entry, Kernel
 
@@ -59,8 +63,7 @@ class VarlenKernel(Kernel, GQAVarlenFwdInterface):
         has_sinks: bool = False,
     ) -> None:
         super().__init__(device_index=device_index)
-        if heads_kv <= 0 or heads % heads_kv != 0:
-            raise ValueError("heads must be divisible by heads_kv")
+        check_head_groups(heads, heads_kv)
         self.has_sinks = has_sinks
         self._unused_sinks = (
             torch.empty(heads, dtype=torch.float32, device=torch.device("cuda", self.device_index))
@@ -120,6 +123,10 @@ class VarlenKernel(Kernel, GQAVarlenFwdInterface):
     def _make_kernel(self) -> Callable:
         """Return the dynamic TileLang program factory owned by this kernel."""
         raise NotImplementedError
+
+    def _compile(self, cfg: dict):
+        """The program for *cfg*."""
+        return self.kernel(cfg["block_m"], cfg["block_n"], cfg["num_stages"], cfg["threads"])
 
     def _make_supply_prog(self, *, with_sink_input: bool = True) -> Callable:
         """Supply valid packed tensors matching the program's input interface.

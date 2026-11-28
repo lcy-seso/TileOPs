@@ -17,7 +17,6 @@ from tileops._kernels.attention.call_spec import (
 from tileops._kernels.kernel_base import Kernel, KernelInterface
 from tileops._ops.attention.gqa.parameters import attention_window, score_softcap
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = ["GQADenseBwdOp"]
@@ -35,6 +34,8 @@ class GQADenseBwdOp(Op):
     a key, or with a cap, is refused when a kernel is selected, naming the limit. Pass them
     anyway, equal to the forward's, so a refused call says why.
     """
+
+    contraction_dtype_from = "q"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "gqa_bwd_preprocess_kernel": GQABwdPreprocessKernel,
@@ -139,7 +140,3 @@ class GQADenseBwdOp(Op):
             launch_dependents=backward.waits_for_preprocess,
         )
         return backward(q, k, v, do, lse_log2, delta, dq_accum)
-
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])

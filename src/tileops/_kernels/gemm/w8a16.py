@@ -35,9 +35,6 @@ from tileops._kernels.kernel_base import Entry, Kernel
 
 __all__ = ["BMMW8A16Kernel"]
 
-_HALF_K = 64
-_PRODUCER_REGS = 24
-
 
 def _in_place(t: torch.Tensor) -> bool:
     """Whether the program reads or writes *t* where it lies: TMA and the 16-byte stores
@@ -156,14 +153,18 @@ def _bmm_w8a16_kernel(
     consumers = threads * groups
     out_chunks = tile_m * WGMMA_ROWS // 8
     part_steps = -(-k_steps // ksplit)
+    # A K step of activations loads as two 64-column TMA boxes, one 128-byte swizzle span each.
+    half_k = QUANT_SCALE_BLOCK // 2
+    # Registers the producer warpgroup keeps: it only issues TMA copies.
+    producer_regs = 24
     step = SETMAXNREG_GRANULARITY
     launch_regs = SM90_REGISTERS // (consumers + threads) // step * step
-    pool = (consumers + threads) * launch_regs - threads * _PRODUCER_REGS
+    pool = (consumers + threads) * launch_regs - threads * producer_regs
     consumer_regs = min(240, pool // consumers // step * step)
 
     @tilelang.jit(
         out_idx=[],
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         compile_flags=[
             *CUDA_COMPILE_FLAGS,
             "-DENABLE_BF16",
@@ -195,7 +196,7 @@ def _bmm_w8a16_kernel(
         ) -> None:
             with T.Kernel(ctas, threads=consumers + threads) as bx:
                 codes = T.alloc_shared((num_stages, rows, QUANT_SCALE_BLOCK), "float8_e4m3fn")
-                acts = T.alloc_shared((num_stages, 2, tile_m, _HALF_K), "bfloat16")
+                acts = T.alloc_shared((num_stages, 2, tile_m, half_k), "bfloat16")
                 staged = T.alloc_shared((wgs, tile_m, WGMMA_ROWS), "bfloat16")
                 scales = T.alloc_shared((wgs, k_steps), "float32")
                 if ksplit > 1:
@@ -281,7 +282,7 @@ def _bmm_w8a16_kernel(
                                     for v in T.vectorized(8):
                                         c[g, m0 + mi, n0 + j + v] = staged[wg, mi, j + v]
                 else:
-                    T.dec_max_nreg(_PRODUCER_REGS)
+                    T.dec_max_nreg(producer_regs)
                     for s in T.serial(per_cta):
                         unit = bx + s * ctas
                         live = T.min(unit, units - 1)
@@ -308,7 +309,7 @@ def _bmm_w8a16_kernel(
                                         a[
                                             g,
                                             m0 : m0 + tile_m,
-                                            k0 + h * _HALF_K : k0 + (h + 1) * _HALF_K,
+                                            k0 + h * half_k : k0 + (h + 1) * half_k,
                                         ],
                                         acts[slot, h, :, :],
                                         barrier=full[slot],

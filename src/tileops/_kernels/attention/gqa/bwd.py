@@ -11,6 +11,7 @@ from tileops._kernels.attention.call_spec import (
     AttentionCall,
     GQABwdInterface,
     GQAPreprocessBwdInterface,
+    check_head_groups,
 )
 from tileops._kernels.build_target import CUDA_COMPILE_FLAGS, target_cache
 from tileops._kernels.constants import LOG2E
@@ -241,8 +242,7 @@ def _gqa_bwd_kernel(
     dQ tile by TMA (SM90); otherwise they run on MMA and dQ is added element by element."""
     sm_scale = (1.0 / dim) ** 0.5 if sm_scale is None else sm_scale
     scale = sm_scale * LOG2E
-    if heads % heads_kv != 0:
-        raise ValueError("heads must be divisible by heads_kv")
+    check_head_groups(heads, heads_kv)
     groups = heads // heads_kv
     accum_dtype = "float"
     # One query head per key/value head writes its dK/dV outright; a shared one adds into f32.
@@ -427,14 +427,8 @@ def _gqa_bwd_kernel(
     return _gqa_bwd_func
 
 
-class GQABwdWGMMAPipelinedKernel(Kernel, GQABwdInterface):
-    """GQA/MHA backward, one CTA per key block; dQ is added into an f32 buffer in the
-    layout of ``q`` and landed in the input dtype by a second launch."""
-
-    supported_archs: list[int] = [90]
-    # The implementation behind the specialised ones for this key.
-    general: bool = True
-    _wgmma: bool = True
+class _GQABwdBase(Kernel):
+    """The construction both GQA backward implementations share."""
 
     @classmethod
     def entry_for(cls, call: AttentionCall) -> Entry:
@@ -473,7 +467,21 @@ class GQABwdWGMMAPipelinedKernel(Kernel, GQABwdInterface):
         self.dim = dim
         self.is_causal = is_causal
         self.dtype = dtype
+        self.sm_scale = sm_scale
+        self.init_config(config)
 
+
+class GQABwdWGMMAPipelinedKernel(_GQABwdBase, GQABwdInterface):
+    """GQA/MHA backward, one CTA per key block; dQ is added into an f32 buffer in the
+    layout of ``q`` and landed in the input dtype by a second launch."""
+
+    supported_archs: list[int] = [90]
+    # The implementation behind the specialised ones for this key.
+    general: bool = True
+    _wgmma: bool = True
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
         self.kernel = _gqa_bwd_kernel(
             self.batch,
             self.heads,
@@ -482,11 +490,9 @@ class GQABwdWGMMAPipelinedKernel(Kernel, GQABwdInterface):
             self.dim,
             self.is_causal,
             self.dtype_str,
-            sm_scale,
+            self.sm_scale,
             self._wgmma,
         )
-
-        self.init_config(config)
 
     # Default configs, widest first. A 256-thread program lays out its shared tiles only at
     # a head dim that is a multiple of 32; the 128-thread ones take any multiple of 16.

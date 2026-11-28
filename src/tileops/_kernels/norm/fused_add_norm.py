@@ -285,7 +285,7 @@ def _held_layer_norm_kernel(
         # while this CTA still reads an earlier exchange.
         peer_words = 4 * cluster if cluster > 1 else 0
         warp_words = 3 if alone else 4
-        raw_peer = -(-(peer_words + warp_words * warps) // 4) * 4
+        raw_peer = align_up(peer_words + warp_words * warps, 4)
         raw_words = raw_peer + (2 * cluster if cluster > 1 else 0)
         raw_adds = (
             steps * -(-vec // 4)
@@ -816,7 +816,7 @@ class _HeldLayerNormKernel(Kernel):
         return [
             {"threads": t, "ctas_per_sm": ctas}
             for t in (128, 256, 512, 1024)
-            if t == 128 or t <= -(-accesses // WARP_LANES) * WARP_LANES
+            if t == 128 or t <= align_up(accesses, WARP_LANES)
             for ctas in (0, *range(1, 9))
             if not ctas or 64 <= SM90_REGISTERS // (t * ctas) < 96
         ]
@@ -877,8 +877,8 @@ class _HeldLayerNormKernel(Kernel):
         ]
         if dividing:
             return min(dividing, key=lambda w: (abs(w - target), w))
-        threads = min(max(target, WARP_LANES), -(-accesses // WARP_LANES) * WARP_LANES)
-        return -(-threads // WARP_LANES) * WARP_LANES
+        threads = min(max(target, WARP_LANES), align_up(accesses, WARP_LANES))
+        return align_up(threads, WARP_LANES)
 
     @staticmethod
     def _vec(n: int, dtype: torch.dtype, cluster: int) -> int:
@@ -933,7 +933,7 @@ class _HeldLayerNormKernel(Kernel):
             # (and the gate) late and holds ``x`` alone.
             operands = self._operands if self._fused else 1
             words = held * self.dtype.itemsize * operands // 4
-            registers = max(64, -(-(held + words + 16) // 8) * 8)
+            registers = max(64, align_up(held + words + 16, 8))
             cfg = {**cfg, "ctas_per_sm": SM90_REGISTERS // (cfg["threads"] * registers)}
         kernel = _held_layer_norm_kernel(
             m,

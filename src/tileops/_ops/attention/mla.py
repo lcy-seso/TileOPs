@@ -29,7 +29,6 @@ from tileops._kernels.attention.call_spec import (
 )
 from tileops._kernels.kernel_base import Kernel, KernelInterface
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = [
@@ -48,6 +47,8 @@ class MLADenseDecodeFwdOp(Op):
     ``PE`` the last extents of ``q`` and ``q_pe``.
     """
 
+    contraction_dtype_from = "q"
+
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "mla_decode_kernel": MLADecodeWSKernel,
         "mla_decode_mma_kernel": MLADecodeMMAKernel,
@@ -57,32 +58,19 @@ class MLADenseDecodeFwdOp(Op):
         "mla_decode_kernel": MLADecodeFwdInterface
     }
 
-    def __init__(
-        self,
-        *,
-        target: Target = None,
-    ) -> None:
-        """Build the op. Shapes and dtype are taken from each call.
-
-        Args:
-            target: Which set of kernels serves this op — a target name, ``BUILTIN``
-                for the in-tree kernels, or ``None`` to decide from the input device.
-        """
-        super().__init__(target=target)
-
     def forward(
         self, q: torch.Tensor, q_pe: torch.Tensor, k: torch.Tensor, k_pe: torch.Tensor
     ) -> torch.Tensor:
-        """Run the op on the inputs the manifest declares.
+        """Attend each request's one query token to its whole cache.
 
         Args:
-            q: Input tensor, dtype ``float16 | bfloat16``.
-            q_pe: Input tensor, same dtype as ``q``.
-            k: Input tensor, same dtype as ``q``.
-            k_pe: Input tensor, same dtype as ``q``.
+            q: ``(B, H, D)`` latent queries, float16 or bfloat16.
+            q_pe: ``(B, H, PE)`` rope queries in the query dtype.
+            k: ``(B, N_kv, H_kv, D)`` latent keys, also the values, in the query dtype.
+            k_pe: ``(B, N_kv, H_kv, PE)`` rope keys in the query dtype.
 
         Returns:
-            ``o``, as the manifest declares. Shape rules: ``o.shape == (B, H, D)``.
+            ``o`` ``(B, H, D)`` in the query dtype.
         """
         batch, heads, dim = q.shape
         _, seqlen_kv, heads_kv, _ = k.shape
@@ -100,10 +88,6 @@ class MLADenseDecodeFwdOp(Op):
             ),
         )(q, q_pe, k, k_pe)
 
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])
-
 
 class MLAPagedFwdOp(Op):
     """Multi-Head Latent Attention (MLA) decode over a paged latent cache, absorbed form.
@@ -118,6 +102,8 @@ class MLAPagedFwdOp(Op):
     exactly. A cache row past a request's ``cache_seqlens`` never reaches a result,
     whatever it holds.
     """
+
+    contraction_dtype_from = "q"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "mla_paged": MLAPagedFwdKernel,
@@ -192,10 +178,6 @@ class MLAPagedFwdOp(Op):
             ),
         )(q, kv_cache, block_table, cache_seqlens, kv_scale)
 
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])
-
 
 class MLAVarlenFwdOp(Op):
     """Multi-Head Latent Attention (MLA) prefill over packed requests, after the latent is
@@ -210,6 +192,8 @@ class MLAVarlenFwdOp(Op):
     The caller guarantees well-formed ``cu_seqlens``, or passes ``validate_inputs=True``,
     which checks them on the CPU on every call.
     """
+
+    contraction_dtype_from = "q"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "mla_varlen_fwd": MLAVarlenPrefillFwdKernel,
@@ -252,14 +236,16 @@ class MLAVarlenFwdOp(Op):
         v: torch.Tensor,
         cu_seqlens: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run the op on the inputs the manifest declares.
+        """Attend each packed request's queries to its own keys.
 
         Args:
-            q: Input tensor, dtype ``float16 | bfloat16``.
-            k_nope: Input tensor, same dtype as ``q``.
-            k_pe: Input tensor, same dtype as ``q``.
-            v: Input tensor, same dtype as ``q``.
-            cu_seqlens: Packed request offsets, dtype ``int32``.
+            q: ``(T_q, H, DN + PE)`` queries, latent part then rope part, float16 or
+                bfloat16.
+            k_nope: ``(T_q, H, DN)`` non-rope keys in the query dtype.
+            k_pe: ``(T_q, PE)`` rope keys, shared by every head, in the query dtype.
+            v: ``(T_q, H, DV)`` values in the query dtype.
+            cu_seqlens: ``int32`` ``(B + 1,)`` request offsets into the packed tokens,
+                from 0 to ``T_q``, nondecreasing.
 
         Returns:
             ``o`` ``(T_q, H, DV)`` and ``lse`` ``(H, T_q)`` float32, ``-inf`` for a row
@@ -281,10 +267,6 @@ class MLAVarlenFwdOp(Op):
             ),
         )(*inputs)
 
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])
-
 
 class MLADenseBwdOp(Op):
     """Multi-Head Latent Attention (MLA) prefill backward over fixed-length requests, after the
@@ -302,6 +284,8 @@ class MLADenseBwdOp(Op):
     ``k = cat(k_nope, k_pe broadcast over heads)``; the gradient of ``k_pe`` is
     ``dk[..., DN:]`` summed over heads.
     """
+
+    contraction_dtype_from = "q"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "mla_dense_bwd": MLADenseBwdKernel,
@@ -341,20 +325,20 @@ class MLADenseBwdOp(Op):
         o: torch.Tensor,
         lse: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Run the op on the inputs the manifest declares.
+        """Back-propagate ``do`` through one dense attention call.
 
         Args:
-            do: The gradient of the loss with respect to ``o``, same dtype as ``q``.
-            q: Input tensor, dtype ``float16 | bfloat16``.
-            k: Input tensor, same dtype as ``q``.
-            v: Input tensor, same dtype as ``q``.
-            o: The forward output, same dtype as ``q``.
-            lse: The forward's natural-log log-sum-exp, ``(B, H, S_q)``, dtype ``float32``.
+            do: ``(B, S_q, H, D_v)`` gradient of the loss with respect to ``o``, in the
+                query dtype.
+            q: ``(B, S_q, H, D_qk)`` queries, float16 or bfloat16.
+            k: ``(B, S_kv, H, D_qk)`` keys in the query dtype; ``S_kv > 0``.
+            v: ``(B, S_kv, H, D_v)`` values in the query dtype.
+            o: ``(B, S_q, H, D_v)`` forward output in the query dtype.
+            lse: ``float32`` ``(B, H, S_q)`` natural-log log-sum-exp of the forward.
 
         Returns:
-            ``dq``, ``dk``, ``dv``, as the manifest declares. Shape rules:
-            ``dq.shape == (B, S_q, H, D_qk)``; ``dk.shape == (B, S_kv, H, D_qk)``;
-            ``dv.shape == (B, S_kv, H, D_v)``.
+            ``dq`` ``(B, S_q, H, D_qk)``, ``dk`` ``(B, S_kv, H, D_qk)`` and ``dv``
+            ``(B, S_kv, H, D_v)``, in the query dtype.
         """
         inputs = tuple(tensor.contiguous() for tensor in (q, k, v, o, do, lse))
         batch, seqlen_q, heads, dim_qk = q.shape
@@ -373,10 +357,6 @@ class MLADenseBwdOp(Op):
                 device=q.device,
             ),
         )(*inputs)
-
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])
 
 
 class MLAVarlenBwdOp(Op):
@@ -398,6 +378,8 @@ class MLAVarlenBwdOp(Op):
     The caller guarantees well-formed offsets, or passes ``validate_inputs=True``, which
     checks them on the CPU on every call.
     """
+
+    contraction_dtype_from = "q"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "mla_varlen_bwd": MLAVarlenBwdKernel,
@@ -443,22 +425,24 @@ class MLAVarlenBwdOp(Op):
         cu_seqlens_q: torch.Tensor,
         cu_seqlens_kv: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Run the op on the inputs the manifest declares.
+        """Back-propagate ``do`` through one packed attention call.
 
         Args:
-            do: The gradient of the loss with respect to ``o``, same dtype as ``q``.
-            q: Input tensor, dtype ``float16 | bfloat16``.
-            k: Input tensor, same dtype as ``q``.
-            v: Input tensor, same dtype as ``q``.
-            o: The forward output, same dtype as ``q``.
-            lse: The forward's natural-log log-sum-exp, ``(H, T_q)``, dtype ``float32``.
-            cu_seqlens_q: Packed request offsets into ``q``, dtype ``int32``.
-            cu_seqlens_kv: Packed request offsets into ``k`` and ``v``, dtype ``int32``.
+            do: ``(T_q, H, D_v)`` gradient of the loss with respect to ``o``, in the query
+                dtype.
+            q: ``(T_q, H, D_qk)`` packed queries, float16 or bfloat16.
+            k: ``(T_kv, H, D_qk)`` packed keys in the query dtype.
+            v: ``(T_kv, H, D_v)`` packed values in the query dtype.
+            o: ``(T_q, H, D_v)`` forward output in the query dtype.
+            lse: ``float32`` ``(H, T_q)`` natural-log log-sum-exp of the forward.
+            cu_seqlens_q: ``int32`` ``(B + 1,)`` request offsets into ``q``, from 0 to
+                ``T_q``, nondecreasing.
+            cu_seqlens_kv: ``int32`` ``(B + 1,)`` request offsets into ``k`` and ``v``,
+                from 0 to ``T_kv``, nondecreasing.
 
         Returns:
-            ``dq``, ``dk``, ``dv``, as the manifest declares. Shape rules:
-            ``dq.shape == (T_q, H, D_qk)``; ``dk.shape == (T_kv, H, D_qk)``;
-            ``dv.shape == (T_kv, H, D_v)``.
+            ``dq`` ``(T_q, H, D_qk)``, ``dk`` ``(T_kv, H, D_qk)`` and ``dv``
+            ``(T_kv, H, D_v)``, in the query dtype.
         """
         inputs = tuple(
             tensor.contiguous() for tensor in (q, k, v, o, do, lse, cu_seqlens_q, cu_seqlens_kv)
@@ -476,7 +460,3 @@ class MLAVarlenBwdOp(Op):
                 device=q.device,
             ),
         )(*inputs)
-
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])

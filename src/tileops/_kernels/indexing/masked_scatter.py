@@ -1,20 +1,18 @@
 """Masked scatter: the true positions of a mask take consecutive source elements, in order."""
 
-import dataclasses
 import math
-from abc import abstractmethod
 
 import tilelang
 import tilelang.language as T
 import torch
 
 from tileops._kernels.build_target import target_cache
-from tileops._kernels.call_spec import CallSpec
 from tileops._kernels.constants import MAX_GRID_YZ_BLOCKS, VECTOR_ACCESS_BYTES
-from tileops._kernels.kernel_base import CompiledProgram, Entry, Kernel, KernelInterface
+from tileops._kernels.indexing.call_spec import MaskedScatterCall, MaskedScatterFwdInterface
+from tileops._kernels.kernel_base import CompiledProgram, Entry, Kernel
 from tileops._utils import WARP_LANES, WARP_SHUFFLE_STAGES
 
-__all__ = ["MaskedScatterCall", "MaskedScatterFwdInterface", "MaskedScatterKernel", "mask_runs"]
+__all__ = ["MaskedScatterKernel", "mask_runs"]
 
 
 def mask_runs(shape: tuple, mask_shape: tuple) -> tuple[int, int]:
@@ -27,38 +25,6 @@ def mask_runs(shape: tuple, mask_shape: tuple) -> tuple[int, int]:
     aligned = (1,) * (len(shape) - len(mask_shape)) + tuple(mask_shape)
     lead = max((i + 1 for i, extent in enumerate(aligned) if extent != 1), default=0)
     return lead, math.prod(shape[lead:])
-
-
-@dataclasses.dataclass(frozen=True)
-class MaskedScatterCall(CallSpec):
-    """The run length and dtype of one call; the run count and source size are dynamic."""
-
-    run_len: int = 0
-    dtype: torch.dtype | None = None
-
-
-class MaskedScatterFwdInterface(KernelInterface):
-    """Write source elements into the true positions of a broadcast mask."""
-
-    request = MaskedScatterCall
-
-    @abstractmethod
-    def forward(
-        self, input: torch.Tensor, mask: torch.Tensor, source: torch.Tensor
-    ) -> torch.Tensor:
-        """Return ``input`` broadcast with ``mask``, its true positions filled from ``source``.
-
-        Args:
-            input: Any shape, in ``call.dtype``, contiguous.
-            mask: bool, broadcastable with ``input``, contiguous; the output's trailing runs
-                of ``call.run_len`` elements each share one mask value.
-            source: Any shape in ``call.dtype``, contiguous, holding at least as many
-                elements as the broadcast mask has true positions.
-
-        Returns:
-            A new tensor of the broadcast shape in ``call.dtype``; the k-th true position in
-            row-major order holds ``source.flatten()[k]``.
-        """
 
 
 @target_cache(maxsize=32)

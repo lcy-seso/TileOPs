@@ -10,7 +10,7 @@ from abc import abstractmethod
 import torch
 
 from tileops._kernels.call_spec import CallSpec
-from tileops._kernels.kernel_base import KernelInterface
+from tileops._kernels.kernel_base import Entry, KernelInterface
 
 __all__ = [
     "DeltaNetCall",
@@ -29,8 +29,16 @@ __all__ = [
     "GLADecodeFwdInterface",
     "KDACall",
     "KDAFwdInterface",
+    "build_entry",
     "head_count_refusal",
 ]
+
+
+def build_entry(cls: type, call: CallSpec, **arguments: object) -> Entry:
+    """Build *cls* by keyword from *arguments* and the call's device index; the sorted
+    arguments are the entry's identity."""
+    arguments = dict(arguments, device_index=call.device_index)
+    return tuple(sorted(arguments.items(), key=lambda item: item[0])), lambda: cls(**arguments)
 
 
 def head_count_refusal(*counts: int) -> str | None:

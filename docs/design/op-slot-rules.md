@@ -78,7 +78,8 @@ design, calling conventions — live in
 - **Rule.** `signature.params` entries in manifest key order; then `*` and any param declaring
   `kw_only: true`, followed by the execution-policy parameters of
   [manifest.md table 7](./manifest.md#t-policy): `target` on every op, then the op's injected
-  implementation objects where it takes them.
+  implementation objects where it takes them. An op without manifest parameters or derived
+  attributes defines no `__init__` and inherits `Op.__init__`.
 - **Example.**
   ```python
   def __init__(

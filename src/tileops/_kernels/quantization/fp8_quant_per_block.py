@@ -16,6 +16,7 @@ from tileops._kernels.constants import (
 from tileops._kernels.kernel_base import Kernel
 from tileops._kernels.quantization.call_spec import FP8QuantPerBlockFwdInterface, QuantizeCall
 from tileops._kernels.quantization.int8_codes import SMALL_SCALE, widen
+from tileops._kernels.streaming_load import load16, load16_evict_first
 from tileops._kernels.warp_reduce import warp_reduce
 from tileops._utils import WARP_LANES
 
@@ -58,6 +59,7 @@ def _fp8_quant_per_block_kernel(n: int, k: int, dtype: str, aligned: bool):
         slots = QUANT_SCALE_BLOCK // rows
         warps = threads // WARP_LANES
         assert cols * rows == threads and slots * rows == QUANT_SCALE_BLOCK
+        load = load16_evict_first if evict_first else load16
 
         def at(s, e, tx, bx, by):
             """The row and column of element ``e`` of slot ``s``."""
@@ -127,12 +129,7 @@ def _fp8_quant_per_block_kernel(n: int, k: int, dtype: str, aligned: bool):
                     if aligned:
                         row, col = at(s, 0, tx, bx, by)
                         if whole or ((row < n) & (col < k)):
-                            T.call_extern(
-                                "handle",
-                                "tileops::load16_evict_first" if evict_first else "tileops::load16",
-                                T.address_of(values[s, 0]),
-                                T.address_of(w[row * k + col]),
-                            )
+                            load(values, (s, 0), w, row * k + col)
                     else:
                         for e in T.unroll(vec):
                             row, col = at(s, e, tx, bx, by)

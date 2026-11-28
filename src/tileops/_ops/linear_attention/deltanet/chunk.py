@@ -12,7 +12,6 @@ from tileops._kernels.linear_attention import (
     DeltaNetChunkFwdKernel,
 )
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = ["DeltaNetChunkBwdOp", "DeltaNetChunkFwdOp"]
@@ -49,6 +48,8 @@ class DeltaNetChunkFwdOp(Op):
         layout: ``q/k [B, T, H, K]``, ``v [B, T, H, V]``, ``beta [B, T, H]``.
 
     """
+
+    contraction_dtype_from = "q"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "deltanet_chunk_fwd": DeltaNetChunkFwdKernel
@@ -94,10 +95,6 @@ class DeltaNetChunkFwdOp(Op):
         kernel = self.kernel_for("deltanet_chunk_fwd", lambda: _chunk_call(self.chunk_size, q, v))
         return kernel(q, k, v, beta)
 
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])
-
 
 class DeltaNetChunkBwdOp(Op):
     """DeltaNet backward operator (ungated).
@@ -105,6 +102,8 @@ class DeltaNetChunkBwdOp(Op):
     Pipeline: prepare_wy_repr -> fwd (to get Aw, Au) -> bwd kernel -> (dq, dk, dv, dbeta).
 
     """
+
+    contraction_dtype_from = "q"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "deltanet_chunk_bwd": DeltaNetChunkBwdKernel
@@ -162,7 +161,3 @@ class DeltaNetChunkBwdOp(Op):
         inputs = (do, q, k, v, beta, h, Aw, Au, w, u)
         kernel = self.kernel_for("deltanet_chunk_bwd", lambda: _chunk_call(self.chunk_size, q, v))
         return kernel(*inputs)
-
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])

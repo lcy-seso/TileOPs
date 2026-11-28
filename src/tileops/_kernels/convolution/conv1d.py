@@ -38,13 +38,12 @@ def _conv1d_kernel(
     kernel_l: int,
     stride_l: int,
     pad_left: int,
-    pad_right: int,
     dilation_l: int,
+    out_l: int,
     has_bias: bool,
     dtype: str,
 ):
     accum_dtype = "float"
-    out_l = (l_in + pad_left + pad_right - dilation_l * (kernel_l - 1) - 1) // stride_l + 1
     k_total = c_in * kernel_l
 
     @tilelang.jit(out_idx=[2], compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16"])
@@ -143,8 +142,8 @@ def _conv1d_unit_stride_kernel(
     kernel_l: int,
     stride_l: int,
     pad_left: int,
-    pad_right: int,
     dilation_l: int,
+    out_l: int,
     has_bias: bool,
     dtype: str,
 ):
@@ -152,7 +151,6 @@ def _conv1d_unit_stride_kernel(
         raise ValueError(f"_conv1d_unit_stride_kernel serves stride 1, got {stride_l}")
     accum_dtype = "float"
     element_bytes = getattr(torch, dtype).itemsize
-    out_l = l_in + pad_left + pad_right - dilation_l * (kernel_l - 1)
     k_total = c_in * kernel_l
 
     @tilelang.jit(out_idx=[2], compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16"])
@@ -295,13 +293,12 @@ def _conv1d_depthwise_kernel(
     kernel_l: int,
     stride_l: int,
     pad_left: int,
-    pad_right: int,
     dilation_l: int,
+    out_l: int,
     has_bias: bool,
     dtype: str,
 ):
     accum_dtype = "float"
-    out_l = (l_in + pad_left + pad_right - dilation_l * (kernel_l - 1) - 1) // stride_l + 1
 
     @tilelang.jit(out_idx=[2], compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16"])
     def _conv1d_depthwise_func(
@@ -370,8 +367,8 @@ def _conv1d_group_kernel(
     kernel_l: int,
     stride_l: int,
     pad_left: int,
-    pad_right: int,
     dilation_l: int,
+    out_l: int,
     has_bias: bool,
     dtype: str,
     groups: int,
@@ -379,7 +376,6 @@ def _conv1d_group_kernel(
     c_out_g: int,
 ):
     accum_dtype = "float"
-    out_l = (l_in + pad_left + pad_right - dilation_l * (kernel_l - 1) - 1) // stride_l + 1
     k_total = c_in_g * kernel_l
 
     @tilelang.jit(out_idx=[2], compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16"])
@@ -567,7 +563,8 @@ def _conv1d_pointwise_kernel(
 
 
 def _geometry(call: Conv1dCall) -> tuple[int, ...]:
-    """The arguments the gathered Conv1d builders start with: the extents and the window."""
+    """The arguments the gathered Conv1d builders start with: the extents, the window and
+    the output length."""
     return (
         call.n,
         call.c_in,
@@ -576,8 +573,8 @@ def _geometry(call: Conv1dCall) -> tuple[int, ...]:
         call.kernel_l,
         call.stride_l,
         call.pad_left,
-        call.pad_right,
         call.dilation_l,
+        call.out_l,
     )
 
 
@@ -669,10 +666,10 @@ def _conv1d_short_filter_kernel(
     l_in: int,
     c_out: int,
     kernel_l: int,
+    out_l: int,
     dtype: str,
     has_bias: bool,
 ):
-    out_l = l_in - kernel_l + 1
     # A thread holds positions + kernel_l - 1 samples in registers and computes
     # `positions` outputs from them for each of its block's two channels.
     positions, threads = 6, 64
@@ -753,7 +750,7 @@ class Conv1dDirectKernel(Kernel, Conv1dFwdInterface):
         super().__init__(device_index=call.device_index)
         self.dtype = call.dtype
         self.kernel = _conv1d_short_filter_kernel(
-            call.l_in, call.c_out, call.kernel_l, self.dtype_str, call.has_bias
+            call.l_in, call.c_out, call.kernel_l, call.out_l, self.dtype_str, call.has_bias
         )
         self.init_config()
 

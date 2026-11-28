@@ -9,7 +9,6 @@ from tileops._kernels.kernel_base import Kernel, KernelInterface
 from tileops._kernels.mamba.call_spec import SSDChunkCouplingCall, SSDChunkCouplingFwdInterface
 from tileops._kernels.mamba.ssd_chunk_coupling import SSDChunkCouplingKernel
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = ["SSDChunkCouplingFwdOp"]
@@ -21,6 +20,8 @@ class SSDChunkCouplingFwdOp(Op):
     Computes cb[b,c,g,l,s] = sum_n C[b,c*Q+l,g,n] * B[b,c*Q+s,g,n]
     with causal masking (cb[l,s] = 0 if s > l).
     """
+
+    contraction_dtype_from = "C"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "ssd_chunk_coupling": SSDChunkCouplingKernel
@@ -74,7 +75,3 @@ class SSDChunkCouplingFwdOp(Op):
             ),
         )
         return kernel(C, B)
-
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["C"][1])

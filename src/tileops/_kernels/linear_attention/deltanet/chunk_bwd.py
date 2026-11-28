@@ -20,6 +20,7 @@ from tileops._kernels.linear_attention.call_spec import (
     DeltaNetChunkCall,
     head_count_refusal,
 )
+from tileops._kernels.linear_attention.deltanet.autotune import tune_program
 from tileops._kernels.linear_attention.v_tile import (
     fit_launches,
     gemm_threads,
@@ -332,6 +333,23 @@ def walk_threads(block_v: int, dim_k: int, wgmma: bool) -> int:
     return gemm_threads(min_gemm_n_threads(128, block_v), wgmma, (dim_k, block_v))
 
 
+def chunk_entry(cls: type, call: DeltaNetChunkCall) -> Entry:
+    """The entry of a DeltaNet chunk kernel, built positionally from the call's extents and
+    dtype; the device index is in the identity because the kernel compiles for the
+    architecture it is built on."""
+    arguments = (
+        call.batch,
+        call.heads,
+        call.seq_len,
+        call.chunk_size,
+        call.dim_k,
+        call.dim_v,
+        Kernel.dtype_to_str(call.dtype),
+    )
+    index = call.device_index
+    return (*arguments, index), lambda: cls(*arguments, device_index=index)
+
+
 class DeltaNetChunkBwdKernel(Kernel, DeltaNetChunkBwdInterface):
     """DeltaNet backward kernel: do -> (dq, dk, dv, dbeta) in the module's three programs."""
 
@@ -339,19 +357,7 @@ class DeltaNetChunkBwdKernel(Kernel, DeltaNetChunkBwdInterface):
 
     @classmethod
     def entry_for(cls, call: DeltaNetChunkCall) -> Entry:
-        """The device index is in the identity because the kernel compiles for the
-        architecture it is built on."""
-        arguments = (
-            call.batch,
-            call.heads,
-            call.seq_len,
-            call.chunk_size,
-            call.dim_k,
-            call.dim_v,
-            cls.dtype_to_str(call.dtype),
-        )
-        index = call.device_index
-        return (*arguments, index), lambda: cls(*arguments, device_index=index)
+        return chunk_entry(cls, call)
 
     @classmethod
     def refusal(cls, call: DeltaNetChunkCall) -> str | None:
@@ -508,7 +514,6 @@ class DeltaNetChunkBwdKernel(Kernel, DeltaNetChunkBwdInterface):
 
     def autotune(self, warmup: int = 10, rep: int = 10) -> None:
         """Autotune each sub-kernel independently and merge best configs."""
-        from tileops._kernels.autotune import autotune as tl_autotune
         from tileops._kernels.linear_attention.deltanet.compute_w_u_bwd import compute_w_u_bwd_tl
 
         args = (
@@ -525,12 +530,7 @@ class DeltaNetChunkBwdKernel(Kernel, DeltaNetChunkBwdInterface):
         budget = self.build_target.smem_budget
 
         def tune(jit, configs, untuned):
-            configs = self.tuning_candidates(configs, untuned)
-            at = dict(configs=configs, warmup=warmup, rep=rep)
-            dns = list(self._autotune_initial_kwargs(jit, configs[0]).keys())
-            if dns:
-                at["do_not_specialize"] = dns
-            return self._call_autotuned_kernel(tl_autotune(**at)(jit), jit, configs[0]).config
+            return tune_program(self, jit, configs, untuned, warmup, rep)
 
         shape = (self.chunk_size, self.dim_k, self.dim_v)
         parallel_best = tune(

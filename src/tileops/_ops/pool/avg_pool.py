@@ -45,13 +45,16 @@ class _AvgPoolFwdOpBase(Op):
         """Build the op. Shapes and dtype are taken from the first call.
 
         Args:
-            kernel_size: Manifest ``params.kernel_size``, ``int | tuple[int, ...]``.
-            stride: Manifest ``params.stride``, ``int | tuple[int, ...] | None``, default ``None``.
-            padding: Manifest ``params.padding``, ``int | tuple[int, ...]``, default ``0``.
-            ceil_mode: Manifest ``params.ceil_mode``, ``bool``, default ``False``.
-            count_include_pad: Manifest ``params.count_include_pad``, ``bool``, default ``True``.
-            divisor_override: Manifest ``params.divisor_override``, ``int | None``, default ``None``.
-            target: Backend target to serve this op, or ``None`` to decide from the input device.
+            kernel_size: Window extent, an int or one per spatial axis.
+            stride: Window step, an int or one per spatial axis; ``None`` steps by
+                ``kernel_size``.
+            padding: Implicit zero padding on both sides, an int or one per spatial axis.
+            ceil_mode: Round each output extent up instead of down.
+            count_include_pad: Count padded positions in a window's divisor.
+            divisor_override: Divide every window sum by this instead; ``None`` divides by
+                the window's element count.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.kernel_size = kernel_size
         self.stride = stride
@@ -62,7 +65,7 @@ class _AvgPoolFwdOpBase(Op):
         super().__init__(target=target)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        """Run the op on ``input``.
+        """Pool ``input``.
 
         Args:
             input: Input, $[N \\times C]$ followed by ``ndim`` spatial axes.
@@ -117,12 +120,14 @@ class AvgPool1dFwdOp(_AvgPoolFwdOpBase):
         """Build the op. Shapes and dtype are taken from the first call.
 
         Args:
-            kernel_size: Manifest ``params.kernel_size``, ``int | tuple[int]``.
-            stride: Manifest ``params.stride``, ``int | tuple[int] | None``, default ``None``.
-            padding: Manifest ``params.padding``, ``int | tuple[int]``, default ``0``.
-            ceil_mode: Manifest ``params.ceil_mode``, ``bool``, default ``False``.
-            count_include_pad: Manifest ``params.count_include_pad``, ``bool``, default ``True``.
-            target: Backend target to serve this op, or ``None`` to decide from the input device.
+            kernel_size: Window extent, an int or a one-element tuple.
+            stride: Window step, an int or a one-element tuple; ``None`` steps by
+                ``kernel_size``.
+            padding: Implicit zero padding on both sides, an int or a one-element tuple.
+            ceil_mode: Round the output extent up instead of down.
+            count_include_pad: Count padded positions in a window's divisor.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         super().__init__(kernel_size, stride, padding, ceil_mode, count_include_pad, target=target)
 

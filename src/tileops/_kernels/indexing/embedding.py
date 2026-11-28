@@ -1,50 +1,20 @@
 """Row gather of an embedding table: ``out[i, :] = weight[input[i], :]``."""
 
-import dataclasses
 import math
-from abc import abstractmethod
 
 import tilelang
 import tilelang.language as T
-import torch
 from tvm import DataType
 
 from tileops._csrc import csrc_include
 from tileops._kernels.build_target import target_cache
-from tileops._kernels.call_spec import CallSpec
 from tileops._kernels.constants import SM_RESIDENT_BLOCKS, VECTOR_ACCESS_BYTES
-from tileops._kernels.kernel_base import Entry, Kernel, KernelInterface
+from tileops._kernels.indexing.call_spec import EmbeddingCall, EmbeddingFwdInterface
+from tileops._kernels.kernel_base import Entry, Kernel
+from tileops._kernels.tiling import align_up
 from tileops._utils import WARP_LANES
 
-__all__ = ["EmbeddingCall", "EmbeddingFwdInterface", "EmbeddingKernel"]
-
-
-@dataclasses.dataclass(frozen=True)
-class EmbeddingCall(CallSpec):
-    """The row width and dtypes of one lookup; the index count and table rows are dynamic."""
-
-    dim: int = 0
-    dtype: torch.dtype | None = None
-    index_dtype: torch.dtype | None = None
-    renorm: bool = False
-
-
-class EmbeddingFwdInterface(KernelInterface):
-    """Gather the table rows the indices name."""
-
-    request = EmbeddingCall
-
-    @abstractmethod
-    def forward(self, input: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
-        """Copy row ``input[...]`` of *weight* for every index.
-
-        Args:
-            input: Indices in ``[0, V)``, any shape, in ``call.index_dtype``, contiguous.
-            weight: The table ``[V, call.dim]`` in ``call.dtype``, contiguous.
-
-        Returns:
-            A new tensor ``[*input.shape, call.dim]`` in ``call.dtype`` on ``call.device``.
-        """
+__all__ = ["EmbeddingKernel"]
 
 
 @target_cache(maxsize=32)
@@ -269,7 +239,7 @@ class EmbeddingKernel(Kernel, EmbeddingFwdInterface):
             slots = cfg["block_rows"] * cfg["block_vectors"]
             stage = 0
             if staged:
-                stage = -(-slots // threads) * threads * cfg["vec"] * self.dtype.itemsize
+                stage = align_up(slots, threads) * cfg["vec"] * self.dtype.itemsize
             # Each resident CTA also reserves the gap to the per-block opt-in limit.
             reserved = target.smem_per_sm - target.smem_budget
             per_sm = min(

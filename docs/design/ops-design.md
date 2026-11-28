@@ -213,13 +213,14 @@ def __init__(
 
     Args:
         dim: Reduction dimension (default -1).
-        target: Backend target to serve this op, or None to decide from the input device.
+        target: Which set of kernels serves this op — a target name, ``BUILTIN``
+            for the in-tree kernels, or ``None`` to decide from the input device.
     """
     self.dim = dim
     super().__init__(target=target)
 ```
 
-**Validation.** Every `__init__` kwarg has an `Args:` entry in its docstring; no extras. `__init__` matches `signature.params` item by item ([manifest.md](manifest.md#parameters)), followed by the table-7 execution-policy parameters it takes. `dtype` is not a kwarg — it is read from the input in `forward()`. A param declaring `kw_only: true` goes after `*`. `super().__init__(target=target)` runs once every manifest parameter is assigned, because it checks them; derived attributes and sub-ops are built after it.
+**Validation.** Every `__init__` kwarg has an `Args:` entry in its docstring; no extras. `__init__` matches `signature.params` item by item ([manifest.md](manifest.md#parameters)), followed by the table-7 execution-policy parameters it takes. `dtype` is not a kwarg — it is read from the input in `forward()`. A param declaring `kw_only: true` goes after `*`. `super().__init__(target=target)` runs once every manifest parameter is assigned, because it checks them; derived attributes and sub-ops are built after it. An op without manifest parameters or derived attributes defines no `__init__` and inherits `Op.__init__`.
 
 **Reference.** [Slot S12](op-slot-rules.md#slot-s12), [S13](op-slot-rules.md#slot-s13).
 
@@ -267,7 +268,7 @@ def __init__(
 
 **Reference.** [Slot S17](op-slot-rules.md#slot-s17), [S18](op-slot-rules.md#slot-s18), [S19](op-slot-rules.md#slot-s19).
 
-**Roof key.** `Op.roof_key()` names the GPU-profile unit that prices the FLOPs `eval_roofline()` counts; the base default `"cuda_core.fp32"` covers CUDA-core fp32 arithmetic. An op whose FLOPs are matmul contractions overrides it — normally `tensor_core_roof` of the contraction's input dtype read from `self.last_call`, branching on instance state (a backend switch) where the contraction dtype differs from the input dtype. Contract and rationale: [`roofline.md §1.4`](roofline.md#14-compute-roof).
+**Roof key.** `Op.roof_key()` names the GPU-profile unit that prices the FLOPs `eval_roofline()` counts; the base default `"cuda_core.fp32"` covers CUDA-core fp32 arithmetic. An op whose FLOPs are matmul contractions names the input tensor or dtype index that holds its contraction dtype, and the base prices it on that dtype's tensor cores; an op whose contraction dtype is fixed or depends on instance state (a backend switch) overrides `roof_key()`. Contract and rationale: [`roofline.md §1.4`](roofline.md#14-compute-roof).
 
 ### Step 6: Package registration
 

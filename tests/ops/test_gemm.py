@@ -29,7 +29,7 @@ from tileops._kernels.gemm.w4a16 import (
     _pair_reduced,
     _select_config,
 )
-from tileops._utils import calibration_key, get_sm_count
+from tileops._utils import calibration_key, device_facts
 from tileops.backend import BUILTIN
 from tileops.gemm import GEMMFP8FwdOp, GEMMFwdOp, GEMMINT8W8A8FwdOp, GEMMW4A8FwdOp, GEMMW4A16FwdOp
 from workloads.device import run_device
@@ -1323,7 +1323,7 @@ def test_gemm_fp8_1d2d_deepest_ring_launches() -> None:
 @pytest.mark.smoke
 def test_gemm_fp8_per_tensor_176_wide_matches_reference() -> None:
     """Per-tensor scaling preserves ragged row and column boundaries."""
-    sm_count = get_sm_count(torch.device(run_device()).index)
+    sm_count = device_facts(torch.device(run_device()).index).sm_count
     test = GEMMFP8Test(248, 176 * (sm_count // 2) - 16, 256, torch.float8_e4m3fn, "per_tensor")
     test.check(GEMMFP8FwdOp(target=BUILTIN), *test.gen_inputs())
 
@@ -1333,7 +1333,7 @@ def test_gemm_fp8_per_tensor_176_wide_matches_reference() -> None:
 @pytest.mark.smoke
 def test_gemm_fp8_per_tensor_192_wide_matches_reference() -> None:
     """Per-tensor scaling preserves a projection with a partial column boundary."""
-    sm_count = get_sm_count(torch.device(run_device()).index)
+    sm_count = device_facts(torch.device(run_device()).index).sm_count
     test = GEMMFP8Test(256, 192 * (sm_count // 2) - 128, 256, torch.float8_e4m3fn, "per_tensor")
     test.check(GEMMFP8FwdOp(target=BUILTIN), *test.gen_inputs())
 
@@ -1451,7 +1451,7 @@ def test_gemm_fp8_short_call_streams_b_in_64_row_blocks(
 ) -> None:
     """A call of few rows runs as c^T = b @ a^T: WGMMA's 64-row M axis takes b's rows and its
     N axis, a multiple of 8, takes a's."""
-    sm_count = get_sm_count(torch.device(run_device()).index)
+    sm_count = device_facts(torch.device(run_device()).index).sm_count
     n = 64 * (sm_count + 9) - 24 if n is None else n
     test = GEMMFP8Test(m, n, k, torch.float8_e4m3fn, scale_mode, out_dtype=out_dtype)
     op = GEMMFP8FwdOp(out_dtype=out_dtype)
@@ -1607,7 +1607,7 @@ def test_gemm_192_wide_transposed_tiles_match_reference(
     runs_192 = bool(cfg.get("coop2_swap")) and cfg["block_n"] == 192
     device = torch.device(run_device())
     board = calibration_key(torch.cuda.get_device_name(device))
-    if board == "h200" and get_sm_count(device.index) == 132:
+    if board == "h200" and device_facts(device.index).sm_count == 132:
         assert runs_192 == uniform_192
     if not uniform_192:
         assert not runs_192, "the 192-wide candidate needs whole row tiles on every board"
@@ -2849,7 +2849,7 @@ def test_gemm_w4a16_pinned_tile_matches_the_reference(m: int, n: int, k: int, co
 def test_gemm_w4a16_drained_ring_serves_whole_k_two_warpgroup_tiles(m: int, n: int, k: int) -> None:
     """On 132 SMs a two-warpgroup tile of 128-wide K tiles over whole K builds the drained
     ring, which matches the reference."""
-    if get_sm_count(torch.device(run_device()).index) != 132:
+    if device_facts(torch.device(run_device()).index).sm_count != 132:
         pytest.skip("the op selects on the device's SMs, and the programs checked count 132")
     test = GEMMW4A16Test(m, n, k, torch.float16)
     op = GEMMW4A16FwdOp(target=BUILTIN)
@@ -2968,7 +2968,7 @@ def test_gemm_w4a16_pairs_deferred_scale_tiles(m: int, n: int, k: int, tile: tup
 def test_gemm_w4a16_deferred_scale_tiles_match_the_reference(m: int, n: int, k: int) -> None:
     """On 132 SMs the paired two-way split, the kept split, the kept and paired stream-K picks
     and ragged rows of the deferred-scale selection match the reference."""
-    if get_sm_count(torch.device(run_device()).index) != 132:
+    if device_facts(torch.device(run_device()).index).sm_count != 132:
         pytest.skip("the op selects on the device's SMs, and the programs checked count 132")
     test = GEMMW4A16Test(m, n, k, torch.float16)
     inputs = test.gen_inputs()
@@ -3008,7 +3008,7 @@ def test_gemm_w4a16_one_warpgroup_split_matches_the_reference(
     assert (cfg["block_n"], cfg["threads"], cfg["split_k"]) == (64, 128, 2)
     m_pad = m if cfg["block_m"] == 8 else -(-m // cfg["block_m"]) * cfg["block_m"]
     assert _pair_reduced(m_pad, n, k, 128, 132, cfg) == paired
-    if get_sm_count(torch.device(run_device()).index) != 132:
+    if device_facts(torch.device(run_device()).index).sm_count != 132:
         pytest.skip("the op selects on the device's SMs, and the program checked counts 132")
     test = GEMMW4A16Test(m, n, k, torch.float16)
     inputs = test.gen_inputs()
@@ -3189,7 +3189,7 @@ def test_gemm_w4a8_decode_publishes_a_grid_with_the_workspace_it_sizes() -> None
     ((_, *workspace),) = kernel._generation.programs.values()
     captured_workspace = [weakref.ref(t) for t in workspace]
     del workspace
-    ctas = get_sm_count(kernel.device_index)
+    ctas = device_facts(kernel.device_index).sm_count
     assert kernel.config["num_ctas"] < ctas
     kernel.config = {**kernel.config, "num_ctas": ctas, "num_stages": 6}
     test.check(op, *inputs, runs=run)
@@ -3302,7 +3302,7 @@ def test_gemm_w4a8_reuses_prefill_state_with_changed_inputs(
     op = GEMMW4A8FwdOp(target=BUILTIN)
     if n is None:
         group_size = op.group_size
-        n = (2 * get_sm_count(torch.device(run_device()).index) + 1) * group_size
+        n = (2 * device_facts(torch.device(run_device()).index).sm_count + 1) * group_size
     repeats = 20 if len(token_counts) == 1 else 3
     for m in token_counts:
         test = GEMMW4A8MixedSignTest(m, n, k, 128)
@@ -3681,7 +3681,7 @@ def test_gemv_register_body(
 )
 def test_gemv_dispatched_body(per_sm: int, extra: int, k: int, rows: int | None) -> None:
     """The staged ring on rows it copies 8 bytes at a time, and odd rows two a warp in a loop."""
-    n = per_sm * get_sm_count(torch.device(run_device()).index) + extra
+    n = per_sm * device_facts(torch.device(run_device()).index).sm_count + extra
     test = GEMMTest(1, n, k, torch.bfloat16, trans_b=True)
     op = GEMMFwdOp()
     test.check(op, *test.gen_inputs())
@@ -3801,7 +3801,7 @@ def test_gemv_register_body_keeps_the_ring_bits(per_sm: int, extra: int, k: int)
     fewer at -1), agree exactly on the rows both calls hold, for a row split over eight
     warps, two rows a warp and a row split over two warps. The output is float32, so a sum
     taken in another order shows."""
-    n = per_sm * get_sm_count(torch.device(run_device()).index)
+    n = per_sm * device_facts(torch.device(run_device()).index).sm_count
     rows = (n, n + extra)
     a, b = GEMMTest(1, max(rows), k, torch.bfloat16, trans_b=True).gen_inputs()
     outputs = []

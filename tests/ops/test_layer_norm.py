@@ -27,7 +27,7 @@ from tileops._kernels.norm import (
 from tileops._kernels.norm import layer_norm as layer_norm_kernel_module
 from tileops._ops.norm.fused_add_layer_norm import FusedAddLayerNormFwdOp
 from tileops._ops.norm.layer_norm import LayerNormFwdOp
-from tileops._utils import WARP_LANES, get_sm_count, get_sm_version
+from tileops._utils import WARP_LANES, device_facts
 from tileops.backend import BUILTIN
 from workloads.device import run_device
 from workloads.norm import (
@@ -270,7 +270,7 @@ def test_layer_norm_held_kernel_leaves_warps_empty_and_normalizes_an_outlier_lea
     test.check(op, *test.gen_inputs())
     (built,) = op.iter_kernels()
     assert isinstance(built, _WideHeld)
-    cluster = built._cluster(n, torch.float32, test.m, get_sm_version(), get_sm_count())
+    cluster = built._cluster(n, torch.float32, test.m, device_facts().arch, device_facts().sm_count)
     accesses = n // cluster // built._vec(n, torch.float32, cluster)
     assert accesses <= 1024 - WARP_LANES
 
@@ -291,8 +291,8 @@ def test_layer_norm_held_kernel_merges_less_a_reference_near_the_mean() -> None:
     compare_outputs(op(x, weight, bias), expected.to(dtype), layer_norm_verification(dtype))
     (built,) = op.iter_kernels()
     assert isinstance(built, _WideHeld)
-    if get_sm_version() >= 90:
-        assert built._cluster(n, dtype, 1, get_sm_version(), get_sm_count()) > 1
+    if device_facts().arch >= 90:
+        assert built._cluster(n, dtype, 1, device_facts().arch, device_facts().sm_count) > 1
 
 
 @pytest.mark.in_tree_kernels
@@ -318,7 +318,7 @@ def test_layer_norm_fragment_normalizes_rows_far_from_zero_without_the_walk(row)
 
     n = 8300
     op = op_preferring(LayerNormFwdOp, "layer_norm_unwalked", Unwalked, normalized_shape=(n,))
-    m = 2 * get_sm_count()
+    m = 2 * device_facts().sm_count
     if row == "lead":
         test = LayerNormOutlierLeadTest(m, n, torch.float32, leads=(0,))
     else:
@@ -469,7 +469,7 @@ def test_fused_add_layer_norm_launch_follows_the_row(n, launches) -> None:
     for m in launches:
         test = FusedAddLayerNormTest(m, n, dtype)
         test.check(op, *test.gen_inputs())
-    sm90 = get_sm_version() >= 90
+    sm90 = device_facts().arch >= 90
     for m, (on_sm90, elsewhere) in launches.items():
         assert _fused_add_launch(op, m) == (on_sm90 if sm90 else elsewhere)
 
@@ -501,7 +501,7 @@ class FusedAddLayerNormVanishingResidualTest(FusedAddLayerNormVanishingResidualW
 def test_fused_add_layer_norm_takes_the_fragment_kernel_past_the_registers(
     rows_per_sm, n, dtype, held, workload
 ) -> None:
-    m = int(rows_per_sm * get_sm_count())
+    m = int(rows_per_sm * device_facts().sm_count)
     op = FusedAddLayerNormFwdOp()
     test = workload(m, n, dtype)
     test.check(op, *test.gen_inputs())
@@ -532,7 +532,7 @@ def test_fused_add_layer_norm_tunes_from_the_rule(monkeypatch) -> None:
     monkeypatch.setattr(kernel, "tune_jit_kernel", recording_tune)
     op.request_tune()
     # On SM90 the lone row's cluster share is one access a thread, so 128 is the only width.
-    sm90 = get_sm_version() >= 90
+    sm90 = device_facts().arch >= 90
     threads = 128 if sm90 else 512
     widths = [128] if sm90 else [128, 256, 512, 1024]
     # Each width with the compiler's registers (0) and with every CTAs-an-SM count that leaves
@@ -608,7 +608,7 @@ def test_fused_add_layer_norm_normalizes_rows_far_from_zero(rows, n, kernel, dty
     test.check(op, *test.gen_inputs())
     (built,) = op.iter_kernels()
     assert isinstance(built, FusedAddLayerNormHeldKernel) == (kernel != "fragment")
-    if kernel in ("split", "queued-split") and get_sm_version() >= 90:
+    if kernel in ("split", "queued-split") and device_facts().arch >= 90:
         assert _fused_add_launch(op, m)[0] > 1
 
 

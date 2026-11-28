@@ -174,6 +174,18 @@ def _manifest_key(op: str | type) -> str:
     return op.__name__ if isinstance(op, type) else op
 
 
+def op_class(name: str, entry: dict) -> type:
+    """The class of op *name*: `tileops.<family>.<name>`.
+
+    The family is the entry's (docs/design/manifest.md § Top-Level Fields).
+
+    Raises:
+        ImportError: The module does not import.
+        AttributeError: The module has no attribute *name*.
+    """
+    return getattr(importlib.import_module(f"tileops.{entry['family']}"), name)
+
+
 def load_workloads(op: str | type) -> list[dict[str, Any]]:
     """Return the workloads list for *op*, an Op class or its manifest key.
 

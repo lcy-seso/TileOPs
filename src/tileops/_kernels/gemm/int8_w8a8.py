@@ -252,7 +252,7 @@ def _gemm_int8_ws_kernel(
 
     @tilelang.jit(
         out_idx=[-1],
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16", *csrc_include("dense_wgmma_helper.h")],
     )
     def _gemm_int8_ws_func(
@@ -483,7 +483,7 @@ def _gemm_int8_pingpong_kernel(
 
     @tilelang.jit(
         out_idx=[-1],
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16", *csrc_include("dense_wgmma_helper.h")],
     )
     def _gemm_int8_pingpong_func(

@@ -10,11 +10,11 @@ from tilelang import language as T
 from tileops._kernels.build_target import CUDA_COMPILE_FLAGS, target_cache
 from tileops._kernels.constants import LOG2E
 from tileops._kernels.kernel_base import CompiledProgram, Entry
+from tileops._kernels.linear_attention.call_spec import build_entry
 from tileops._kernels.linear_attention.gla.call_spec import (
     PASS_CONFIGS,
     GLACall,
     GLAFwdInterface,
-    build_entry,
     dense_refusal,
 )
 from tileops._kernels.linear_attention.gla.chunk_fwd import (
@@ -415,6 +415,8 @@ class GLADensePrefillPartitionedKernel(GLAChunkedFwdKernel, GLAFwdInterface):
         return build_entry(
             cls,
             call,
+            scale=call.scale,
+            dtype=call.dtype,
             batch=call.batch,
             seq_len=call.seq_len,
             heads=call.heads,

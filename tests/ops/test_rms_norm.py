@@ -10,6 +10,7 @@ from tests.compile_contract import assert_op_owns_graph_nodes, register_compile_
 from tests.cuda_graph_contract import check_replay
 from tests.misaligned import misaligned
 from tests.workload_test_base import FixtureBase, TestBase
+from tileops._kernels.constants import SM_RESIDENT_BLOCKS
 from tileops._kernels.kernel_base import Kernel
 from tileops._kernels.norm import rms_norm_staged
 from tileops._kernels.norm.rms_norm import (
@@ -21,7 +22,7 @@ from tileops._kernels.norm.rms_norm import (
 from tileops._kernels.tiling import ALIGNMENT
 from tileops._ops.norm.fused_add_rms_norm import FusedAddRMSNormFwdOp
 from tileops._ops.norm.rms_norm import RMSNormFwdOp
-from tileops._utils import RESIDENT_CTAS, get_shared_memory_optin, get_sm_count
+from tileops._utils import device_facts
 from tileops.backend._dispatch import device_facts_of
 from workloads.device import run_device
 from workloads.norm import (
@@ -424,7 +425,7 @@ def test_rms_norm_many_waves_of_held_rows(n: int) -> None:
     rows = RMSNormPairedKernel._MIN_WAVES * per_sm * props.multi_processor_count
     kernel = _check_served_by(rows, n, torch.bfloat16, "RMSNormPairedKernel")
     sources = [program.get_kernel_source() for program in kernel._generation.programs.values()]
-    cap = RESIDENT_CTAS[props.major * 10 + props.minor]
+    cap = SM_RESIDENT_BLOCKS[props.major * 10 + props.minor]
     bound = f"{threads}, {cap if per_sm >= cap else 1}"
     assert {b for s in sources for b in re.findall(r"__launch_bounds__\(([\d, ]+)\)", s)} == {bound}
 
@@ -483,7 +484,7 @@ def test_rms_norm_zero_centered_many_waves_of_held_rows_stay_with_the_row_kernel
     threads = _paired_width(2048, torch.bfloat16.itemsize)
     per_sm = min(
         props.max_threads_per_multi_processor // threads,
-        RESIDENT_CTAS[props.major * 10 + props.minor],
+        SM_RESIDENT_BLOCKS[props.major * 10 + props.minor],
     )
     rows = RMSNormPairedKernel._MIN_WAVES * per_sm * props.multi_processor_count
     _check_served_by(rows, 2048, torch.bfloat16, "RMSNormKernel", zero_centered=True)
@@ -495,7 +496,9 @@ def test_rms_norm_untuned_warp_rows_take_the_fewest_threads_that_fill_the_sm() -
     """Untuned warp rows run on the fewest threads a block whose resident-block cap still fills
     the SM's threads, and are right with and without a weight past the last full block."""
     props = torch.cuda.get_device_properties(run_device())
-    threads = props.max_threads_per_multi_processor // RESIDENT_CTAS[props.major * 10 + props.minor]
+    threads = (
+        props.max_threads_per_multi_processor // SM_RESIDENT_BLOCKS[props.major * 10 + props.minor]
+    )
     test = RMSNormTest(33, 256, torch.bfloat16)
     op = RMSNormFwdOp(normalized_shape=(256,), eps=1e-6)
     test.check(op, *test.gen_inputs())
@@ -554,8 +557,8 @@ def test_rms_norm_rows_exceeding_shared_memory(rows, n, dtype, has_weight) -> No
 def test_rms_norm_widest_row_past_the_sm_count() -> None:
     # The widest row shared memory holds, at more rows than SMs: staged beside the reduction's
     # scratch it would pass the budget, so the row kernel holds it in registers.
-    n = get_shared_memory_optin() // 2 // ALIGNMENT * ALIGNMENT
-    x = torch.randn(get_sm_count() + 1, n, device=run_device(), dtype=torch.float16)
+    n = device_facts().smem_budget // 2 // ALIGNMENT * ALIGNMENT
+    x = torch.randn(device_facts().sm_count + 1, n, device=run_device(), dtype=torch.float16)
     weight = torch.randn(n, device=x.device, dtype=x.dtype)
     expected = F.rms_norm(x.float(), (n,), weight.float(), eps=1e-6).to(x.dtype)
     actual = RMSNormFwdOp(normalized_shape=(n,), eps=1e-6)(x, weight)

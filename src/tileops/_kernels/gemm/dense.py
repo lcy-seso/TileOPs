@@ -14,6 +14,7 @@ from tileops._kernels.build_target import CUDA_COMPILE_FLAGS, target_cache
 from tileops._kernels.constants import (
     MAX_BLOCK_THREADS,
     QUANT_SCALE_BLOCK,
+    VECTOR_ACCESS_BYTES,
     WARPGROUP_THREADS,
     WGMMA_ROWS,
 )
@@ -39,7 +40,7 @@ from tileops._kernels.gemm.heuristics import (
 from tileops._kernels.kernel_base import CompiledProgram, Entry, Kernel
 from tileops._kernels.tiling import grouped_tile_id
 from tileops._kernels.warp_reduce import warp_reduce
-from tileops._utils import STR_TO_DTYPE, WARP_LANES
+from tileops._utils import WARP_LANES
 from tileops.trace import _passes as passes
 from tileops.trace import trace
 
@@ -127,7 +128,7 @@ def _a_row_load(m: int, block_m: int, block_k: int, dtype: str) -> tuple[int, in
     128-byte swizzle atom of K at a time, so each copy fills a contiguous shared region; a
     ``block_k`` the atom does not divide loads the full tile.
     """
-    atom = min(block_k, 128 // STR_TO_DTYPE[dtype].itemsize)
+    atom = min(block_k, 128 // getattr(torch, dtype).itemsize)
     if -(-m // block_m) > 1 or block_k % atom:
         return block_m, atom
     return min(block_m, -(-m // 8) * 8), atom
@@ -877,7 +878,7 @@ def _gemm_fp8_ws_kernel(
 
     @tilelang.jit(
         out_idx=[-1],
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         compile_flags=[
             *CUDA_COMPILE_FLAGS,
             "-DENABLE_BF16",
@@ -1240,7 +1241,7 @@ def _gemm_fp8_ws_splitk_kernel(
         )
 
     @tilelang.jit(
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16", "-DENABLE_FP8"],
     )
     def _gemm_fp8_ws_splitk_func(
@@ -1494,7 +1495,7 @@ def _gemm_kernel(
 
     @tilelang.jit(
         out_idx=trace.out_idx(1, traced),
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16", *csrc_include("dense_wgmma_helper.h")],
     )
     def _gemm_func(
@@ -1515,7 +1516,7 @@ def _gemm_kernel(
         b_evict = _b_eviction(m, block_m)
         a_rows, a_atom = _a_row_load(m, block_m, block_k, dtype)
         # TMA stores the output where its rows are a whole number of 16-byte units.
-        tma_epilogue = (n * STR_TO_DTYPE[c_dtype].itemsize) % 16 == 0
+        tma_epilogue = (n * getattr(torch, c_dtype).itemsize) % 16 == 0
         if cluster_m > 1 and (-(-m // block_m) % cluster_m or panel_size > 0):
             raise ValueError(
                 f"cluster_m={cluster_m} must divide the M grid and runs without a panel swizzle"
@@ -1721,7 +1722,7 @@ def _gemm_splitk_kernel(
 
     @tilelang.jit(
         out_idx=[-1],
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16"],
     )
     def _gemm_splitk_func(
@@ -2080,7 +2081,7 @@ def _gemm_coop2_kernel(
 
     @tilelang.jit(
         out_idx=[-1],
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16", *csrc_include("dense_wgmma_helper.h")],
     )
     def _gemm_coop2_func(
@@ -2139,7 +2140,7 @@ def _gemm_coop2_kernel(
 
         # TMA addresses the output only where its rows are a whole number of 16-byte
         # units; there it also drops what an M / N tail puts past the output.
-        tma_rows = (n * STR_TO_DTYPE[c_dtype].itemsize) % 16 == 0
+        tma_rows = (n * getattr(torch, c_dtype).itemsize) % 16 == 0
 
         # A last chunk overlapping the one before waits for its global writes.
         narrow_chunks = -(-narrow_n // sn)
@@ -2481,7 +2482,7 @@ def _gemm_coop2_swap_kernel(
 
     @tilelang.jit(
         out_idx=[-1],
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16", *csrc_include("dense_wgmma_helper.h")],
     )
     def _gemm_coop2_swap_func(
@@ -2814,7 +2815,7 @@ def _gemm_pingpong_kernel(
     c_dtype = out_dtype or dtype
     # Every tile leaves through the TMA store, which addresses output rows only in whole
     # 16-byte units.
-    if (n * STR_TO_DTYPE[c_dtype].itemsize) % 16:
+    if (n * getattr(torch, c_dtype).itemsize) % 16:
         raise ValueError(f"_gemm_pingpong_kernel needs {c_dtype} rows of 16-byte units, got n={n}")
     accum_dtype = "float"
     block_m = 128
@@ -2824,7 +2825,7 @@ def _gemm_pingpong_kernel(
 
     @tilelang.jit(
         out_idx=[-1],
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16", *csrc_include("dense_wgmma_helper.h")],
     )
     def _gemm_pingpong_func(
@@ -3136,7 +3137,7 @@ def _gemm_coop2_splitk_kernel(
 
     @tilelang.jit(
         out_idx=[-1],
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16"],
     )
     def _gemm_coop2_splitk_func(
@@ -3493,12 +3494,12 @@ def _gemm_stream_kernel(
     accum_dtype = "float"
     c_dtype = out_dtype or dtype
     # The output tile stores through TMA, which needs 16-byte output rows.
-    tma_epilogue = (n * STR_TO_DTYPE[c_dtype].itemsize) % 16 == 0
+    tma_epilogue = (n * getattr(torch, c_dtype).itemsize) % 16 == 0
     wgmma_dtype = "kBFloat16" if dtype == "bfloat16" else "kFloat16"
 
     @tilelang.jit(
         out_idx=[-1],
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16", *csrc_include("dense_wgmma_helper.h")],
     )
     def _gemm_stream_func(block_k: int, num_stages: int, blocks: int) -> Callable:
@@ -3508,7 +3509,7 @@ def _gemm_stream_kernel(
         k_iters = T.ceildiv(k, block_k)
         # One TMA copy per 128-byte swizzle atom of K: a window of a two-atom swizzled tile
         # is not contiguous in shared memory.
-        atom = min(block_k, 128 // STR_TO_DTYPE[dtype].itemsize)
+        atom = min(block_k, 128 // getattr(torch, dtype).itemsize)
         num_accum_regs = rows * mpad // WARPGROUP_THREADS
         # The helper issues one 64-wide K chunk a call.
         native_wgmma = helper_width and block_k % 64 == 0
@@ -3678,7 +3679,7 @@ def _gemm_coop2s_kernel(
 
     @tilelang.jit(
         out_idx=[-1],
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16"],
     )
     def _gemm_coop2s_func(block_n: int = 64, block_k: int = 128, num_stages: int = 4) -> Callable:
@@ -4150,7 +4151,7 @@ def _gemm_small_batch_kernel(
         reduce_threads: int = 128,
         num_stages: int = 4,
     ) -> Callable:
-        tile_k = 128 // (STR_TO_DTYPE[dtype].itemsize * 8)
+        tile_k = VECTOR_ACCESS_BYTES // getattr(torch, dtype).itemsize
         block_k = reduce_threads * tile_k
         b_evict = "evict_first"  # one N range per CTA, so B is read once
 
@@ -4245,7 +4246,7 @@ def _gemv_row_kernel(
     """
     accum_dtype = "float"
     c_dtype = out_dtype or dtype
-    vec = 128 // (STR_TO_DTYPE[dtype].itemsize * 8)
+    vec = VECTOR_ACCESS_BYTES // getattr(torch, dtype).itemsize
     flags = [*CUDA_COMPILE_FLAGS, "-DENABLE_BF16"]
 
     @tilelang.jit(out_idx=[-1], compile_flags=flags)
@@ -4584,7 +4585,7 @@ def _gemm_basic_kernel(
 
     @tilelang.jit(
         out_idx=[-1],
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16"],
     )
     def _gemm_basic_func(

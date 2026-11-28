@@ -21,7 +21,6 @@ from tileops._ops.attention.gqa.parameters import (
     score_softcap,
 )
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = ["GQAPagedFwdOp"]
@@ -71,6 +70,8 @@ class GQAPagedFwdOp(Op):
     ``cache_seqlens``, or passes ``validate_inputs=True``, which checks them on the CPU on
     every call.
     """
+
+    contraction_dtype_from = "q"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "gqa_decode_paged_bs1_kernel": GQADecodePagedBs1Kernel,
@@ -124,7 +125,8 @@ class GQAPagedFwdOp(Op):
             validate_inputs: Check on the CPU that ``cu_seqlens_q`` starts at 0, never decreases
                 and ends at the query token count, and that ``block_table`` and
                 ``cache_seqlens`` lie in their manifest ranges.
-            target: Backend target, or ``None`` to resolve from the input device.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.is_causal = is_causal
         self.sm_scale = sm_scale
@@ -137,10 +139,6 @@ class GQAPagedFwdOp(Op):
         self.rope_layout = rope_layout
         self.validate_inputs = validate_inputs
         super().__init__(target=target)
-
-    def roof_key(self) -> str:
-        """Paged attention's contractions are priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])
 
     def _paged_call(
         self,

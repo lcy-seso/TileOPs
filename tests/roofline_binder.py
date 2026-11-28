@@ -19,9 +19,8 @@ import torch
 from tileops._ops._signature_codegen import install
 from tileops._ops.moe.staged import MoELayoutRowsRoofline
 from tileops._ops.op_base import Op
-from tileops.manifest import load_adts, load_manifest
+from tileops.manifest import load_adts, load_manifest, op_class
 from tileops.manifest._plan import entry_plan
-from tileops.manifest._registry import op_class
 from tileops.manifest._workload import instantiate
 
 __all__ = ["manifest_cases", "signature_class"]

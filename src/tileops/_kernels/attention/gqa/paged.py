@@ -18,6 +18,7 @@ from tileops._kernels.attention.call_spec import (
     ATTENTION_DTYPES,
     AttentionCall,
     GQAPagedFwdInterface,
+    check_head_groups,
 )
 from tileops._kernels.attention.online_softmax import (
     make_apply_softcap,
@@ -757,8 +758,7 @@ class GQAPagedFwdKernel(Kernel, GQAPagedFwdInterface):
         device_index: int | None = None,
     ) -> None:
         super().__init__(device_index=device_index)
-        if heads_kv <= 0 or heads % heads_kv != 0:
-            raise ValueError("heads must be a positive multiple of heads_kv")
+        check_head_groups(heads, heads_kv)
         if page_size <= 0:
             raise ValueError("page_size must be positive")
         if max_pages_per_req <= 0:
@@ -780,18 +780,14 @@ class GQAPagedFwdKernel(Kernel, GQAPagedFwdInterface):
         self.softcap = softcap
         self.rows_fill_tile = rows_fill_tile
         self.has_sinks = has_sinks
-        self._unused_sinks = torch.empty(
-            heads, dtype=torch.float32, device=torch.device("cuda", self.device_index)
-        )
+        device = torch.device("cuda", self.device_index)
+        self._unused_sinks = torch.empty(heads, dtype=torch.float32, device=device)
         self.fuse_rope = fuse_rope
         self.max_position = max_position
         self.rotary_dim = rotary_dim or dim
         self.rope_layout = rope_layout
-        self._unused_rope = torch.empty(
-            (1, 1), dtype=dtype, device=torch.device("cuda", self.device_index)
-        )
+        self._unused_rope = torch.empty((1, 1), dtype=dtype, device=device)
         # Stand-ins for the scales of a 16-bit operand, which the program never reads.
-        device = torch.device("cuda", self.device_index)
         kv_scale_shape = (batch, heads_kv) if per_request_kv_scale else (1,)
         self._unit_scales = (
             torch.ones((batch, heads_kv), dtype=torch.float32, device=device),
@@ -826,8 +822,8 @@ class GQAPagedFwdKernel(Kernel, GQAPagedFwdInterface):
             # A producer warpgroup specializes the scan on SM90 only, which decides how the
             # key tile the cache end cuts drops its stale rows.
             target.arch >= 90,
-            str(self.query_dtype).removeprefix("torch."),
-            str(self.cache_dtype).removeprefix("torch."),
+            self.dtype_to_str(self.query_dtype),
+            self.dtype_to_str(self.cache_dtype),
             per_request_kv_scale,
         )
         self._supply_prog = self._make_supply_prog()

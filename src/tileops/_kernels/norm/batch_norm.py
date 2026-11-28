@@ -35,6 +35,7 @@ from tileops._kernels.norm.call_spec import (
     BatchNormTrainFwdInterface,
     InstanceNormInferFwdInterface,
 )
+from tileops._kernels.tiling import align_up
 from tileops._kernels.warp_reduce import warp_reduce
 from tileops._utils import WARP_LANES
 
@@ -205,7 +206,7 @@ class _TiledPath:
         # No tile divides L: the last tile is masked. Below the threshold one
         # block still holds the channel, rounded up to a whole thread count.
         threads = max((t for t in reduce_threads if t <= L), default=reduce_threads[-1])
-        block_l = -(-L // threads) * threads
+        block_l = align_up(L, threads)
         if block_l <= persistent_max_l:
             return [{"block_l": block_l, "threads": threads}]
         return [{"block_l": max_block_l, "threads": reduce_threads[0]}]

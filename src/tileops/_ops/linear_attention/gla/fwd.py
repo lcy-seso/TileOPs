@@ -59,8 +59,8 @@ class GLAFwdOp(Op):
             validate_inputs: Check on the CPU that ``cu_seqlens`` (and
                 ``cu_seqlens_cpu``) start at 0, never decrease and end at ``S``.
                 It synchronizes the device; leave it off under CUDA Graph capture.
-            target: Backend target, or ``None`` to resolve from the input
-                device.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.scale = scale
         self.validate_inputs = validate_inputs

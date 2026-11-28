@@ -18,7 +18,6 @@ from collections.abc import Callable
 import tilelang
 import tilelang.language as T
 import torch
-from tvm import DataType
 
 from tileops._csrc import csrc_include
 from tileops._kernels.build_target import target_cache
@@ -70,7 +69,7 @@ def _softmax_streaming_kernel(M, N, op_kind, dtype, out_dtype, ctas, ctas_per_sm
     tiles of a row, as many whole ones as ``held_bytes`` of shared memory take, are kept
     from the first pass, so the second reads them from shared memory instead.
     """
-    itemsize = DataType(dtype).bits // 8
+    itemsize = getattr(torch, dtype).itemsize
     vec = math.gcd(N, VECTOR_ACCESS_BYTES // itemsize)
     neg_inf = float("-inf")
 
@@ -253,7 +252,7 @@ def _softmax_kernel_single(M: int, N: int, op_kind: str, dtype: str, out_dtype: 
     _needs_pad = N_padded != N
     _neg_inf = float("-inf")
     _stages_row = op_kind == "log_softmax"
-    vec = VECTOR_ACCESS_BYTES // (DataType(dtype).bits // 8)
+    vec = VECTOR_ACCESS_BYTES // getattr(torch, dtype).itemsize
 
     @tilelang.jit(out_idx=[1], compile_flags=csrc_include("streaming_load.h", "approx_math.h"))
     def _func(block_m, threads):

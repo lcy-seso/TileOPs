@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from tileops._ops.attention.mha import MHAPagedFwdOp
+from tileops._ops.gemm.gemm import GEMMFwdOp
 from tileops._perf.profile import load_profile, tensor_core_roof
 
 pytestmark = pytest.mark.smoke
@@ -47,10 +49,17 @@ class TestComputeRoofContract:
         op = AddFwdOp.__new__(AddFwdOp)
         assert op.roof_key() == "cuda_core.fp32"
 
-    def test_matmul_op_prices_on_the_bound_dtype(self):
-        from tileops._ops.gemm.gemm import GEMMFwdOp
-
-        op = GEMMFwdOp.__new__(GEMMFwdOp)
-        call = SimpleNamespace(indices={"T": "bfloat16"})
-        op._last_call = SimpleNamespace(materialize=lambda: call)
+    @pytest.mark.parametrize(
+        "op_cls, call",
+        [
+            (GEMMFwdOp, {"tensors": {}, "indices": {"T": "bfloat16"}}),
+            (
+                MHAPagedFwdOp,
+                {"tensors": {"q": ((1, 1, 1, 64), "bfloat16")}, "indices": {}},
+            ),
+        ],
+    )
+    def test_matmul_op_prices_on_the_bound_dtype(self, op_cls, call):
+        op = op_cls.__new__(op_cls)
+        op._last_call = SimpleNamespace(materialize=lambda: SimpleNamespace(**call))
         assert op.roof_key() == "tensor_core.bf16"

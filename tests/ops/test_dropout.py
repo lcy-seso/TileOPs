@@ -161,7 +161,7 @@ def test_dropout_scales_past_the_float16_range() -> None:
 def test_dropout_advances_the_generator_past_a_short_call() -> None:
     """A call on fewer elements than one thread holds moves torch's generator past every draw
     a thread can use, so the next call's mask does not reuse them."""
-    from tileops._kernels.elementwise.dropout import DropoutFwdInterface
+    from tileops._kernels.elementwise.call_spec import DropoutFwdInterface
     from tileops._ops.elementwise.dropout import DropoutFwdOp
 
     x = torch.ones(5, dtype=torch.float16, device=run_device())

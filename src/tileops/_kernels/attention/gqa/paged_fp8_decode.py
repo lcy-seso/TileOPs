@@ -670,7 +670,7 @@ class GQAPagedFP8DecodeKernel(Kernel, GQAPagedFwdInterface):
             return "requires a query of the output dtype or FP8"
         if call.dim not in cls._DIMS:
             return f"requires head dimension in {cls._DIMS}"
-        if call.heads_kv <= 0 or call.heads % call.heads_kv != 0:
+        if not call.whole_head_groups:
             return "requires heads to be a multiple of heads_kv"
         if call.sm_scale is not None and call.sm_scale <= 0.0:
             return "requires a positive scale"
@@ -772,7 +772,7 @@ class GQAPagedFP8DecodeKernel(Kernel, GQAPagedFwdInterface):
             self.sm_scale,
             softcap,
             self.dtype_str,
-            str(self.query_dtype).removeprefix("torch."),
+            self.dtype_to_str(self.query_dtype),
             per_request_kv_scale,
         )
         self.init_config(config)

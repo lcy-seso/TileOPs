@@ -8,7 +8,7 @@ import torch
 from tileops._kernels.elementwise import SinusoidalFwdKernel
 from tileops._kernels.elementwise.call_spec import SinusoidalCall, SinusoidalFwdInterface
 from tileops._kernels.kernel_base import KernelInterface
-from tileops._ops.elementwise._base import generated_on
+from tileops._ops._signature_codegen import tensorless_device
 from tileops._ops.op_base import Op
 from tileops.backend import Target
 
@@ -68,7 +68,7 @@ class SinusoidalFwdOp(Op):
         kernel = self.kernel_for(
             "sinusoidal",
             lambda: SinusoidalCall(
-                device=generated_on(self),
+                device=tensorless_device(self),
                 seq_len=self.seq_len,
                 d_model=self.d_model,
                 dtype=self.out_dtype,

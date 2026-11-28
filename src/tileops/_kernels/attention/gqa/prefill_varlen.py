@@ -16,6 +16,7 @@ import tilelang
 import tilelang.language as T
 import torch
 
+from tileops._kernels.attention.call_spec import check_head_groups
 from tileops._kernels.attention.online_softmax import (
     make_apply_softcap,
     make_online_softmax_with_mask_guard,
@@ -106,8 +107,7 @@ def _gqa_prefill_varlen_fwd_kernel(
     score_scale = dim**-0.5 if sm_scale is None else sm_scale
     use_softcap = softcap > 0.0
     scale = LOG2E if use_softcap or score_scale <= 0 else score_scale * LOG2E
-    if heads % heads_kv != 0:
-        raise ValueError("heads must be divisible by heads_kv")
+    check_head_groups(heads, heads_kv)
     groups = heads // heads_kv
     accum_dtype = "float"
 
@@ -342,28 +342,24 @@ def _gqa_prefill_varlen_fwd_kernel(
     return _gqa_prefill_varlen_fwd_func
 
 
-def prefill_shared_bytes(config: dict, *, batch: int, dim: int, element: int) -> int:
-    """Count the one-stage program's shared buffers with allocation alignment."""
-    block_m, block_n = config["block_m"], config["block_n"]
-    tile = block_n * dim * element
-    buffers = [block_m * dim * element, tile, tile, 4 * (batch + 1)]
-    if stages_score_tile(block_m, config["threads"]):
-        buffers += [block_m * block_n * element, 4 * config["threads"], 4 * config["threads"]]
-    return _aligned_bytes(buffers)
-
-
 def prefill_default_config(*, batch: int, dim: int, element: int, budget: int):
     """Select the existing one-stage plan, or report that no candidate fits."""
+
+    def shared_bytes(config: dict) -> int:
+        """The one-stage program's shared buffers with allocation alignment."""
+        block_m, block_n = config["block_m"], config["block_n"]
+        tile = block_n * dim * element
+        buffers = [block_m * dim * element, tile, tile, 4 * (batch + 1)]
+        if stages_score_tile(block_m, config["threads"]):
+            buffers += [block_m * block_n * element, 4 * config["threads"], 4 * config["threads"]]
+        return _aligned_bytes(buffers)
+
     narrow = _narrow_config(dim)
     candidates = [narrow, {**narrow, "block_m": 32}, {**narrow, "block_m": 32, "block_n": 16}]
     if 256 < dim <= 512:
         candidates.insert(0, {"block_m": 64, "block_n": 64, "num_stages": 1, "threads": 256})
     return next(
-        (
-            config
-            for config in candidates
-            if prefill_shared_bytes(config, batch=batch, dim=dim, element=element) <= budget
-        ),
+        (config for config in candidates if shared_bytes(config) <= budget),
         None,
     )
 
@@ -467,7 +463,3 @@ class GQAPrefillVarlenFwdKernel(VarlenKernel):
             rope_sin,
             sinks if self.has_sinks else self._unused_sinks,
         )
-
-    def _compile(self, cfg: dict):
-        """The program for *cfg*."""
-        return self.kernel(cfg["block_m"], cfg["block_n"], cfg["num_stages"], cfg["threads"])

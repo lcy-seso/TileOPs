@@ -12,7 +12,7 @@ import tilelang.language as T
 import torch
 
 from tileops._kernels.attention.call_spec import MLAVarlenCall, MLAVarlenFwdInterface
-from tileops._kernels.attention.gqa.prefill_varlen import stages_score_tile
+from tileops._kernels.attention.gqa.prefill_varlen import _aligned_bytes, stages_score_tile
 from tileops._kernels.attention.online_softmax import (
     make_online_softmax_with_mask_guard,
     make_rescale,
@@ -20,7 +20,6 @@ from tileops._kernels.attention.online_softmax import (
 from tileops._kernels.build_target import CUDA_COMPILE_FLAGS, target_cache
 from tileops._kernels.constants import (
     LOG2E,
-    SHARED_BUFFER_ALIGN_BYTES,
 )
 from tileops._kernels.grouped_tiling import GroupTiling
 from tileops._kernels.kernel_base import Entry, Kernel
@@ -256,7 +255,66 @@ def _mla_varlen_fwd_kernel(
     return _mla_varlen_fwd_func
 
 
-class MLAVarlenPrefillFwdKernel(Kernel, MLAVarlenFwdInterface):
+class _MLAVarlenFwdBase(Kernel, MLAVarlenFwdInterface):
+    """The construction both packed-varlen MLA prefill schedules share."""
+
+    @classmethod
+    def entry_for(cls, call: MLAVarlenCall) -> Entry:
+        args = dict(
+            batch=call.batch,
+            heads=call.heads,
+            dim_nope=call.dim_nope,
+            dim_pe=call.dim_pe,
+            dim_v=call.dim_v,
+            is_causal=call.is_causal,
+            sm_scale=call.sm_scale,
+            dtype=call.dtype,
+            device_index=call.device_index,
+        )
+        return tuple(args.items()), lambda: cls(**args)
+
+    def __init__(
+        self,
+        batch: int,
+        heads: int,
+        dim_nope: int,
+        dim_pe: int,
+        dim_v: int,
+        is_causal: bool,
+        dtype: torch.dtype,
+        sm_scale: float | None = None,
+        config: dict | None = None,
+        *,
+        device_index: int | None = None,
+    ) -> None:
+        """Hold one call shape.
+
+        Args:
+            batch: Requests the packing carries, so the length of ``cu_seqlens`` less one.
+            heads: Query heads.
+            dim_nope: Width of the key's per-head half.
+            dim_pe: Width of the key's shared rope half.
+            dim_v: Width of a value row.
+            is_causal: Whether a query row reads only keys at or before its position.
+            dtype: Input and output dtype.
+            sm_scale: Score scale, or ``None`` for ``(dim_nope + dim_pe) ** -0.5``.
+            config: ``MLAVarlenPrefillFwdKernel``'s tile sizes and pipeline depth, or ``None``
+                for the default; the warp-specialized schedule's geometry is fixed and reads none.
+            device_index: CUDA device the program is built for.
+        """
+        super().__init__(device_index=device_index)
+        self.batch = batch
+        self.heads = heads
+        self.dim_nope = dim_nope
+        self.dim_pe = dim_pe
+        self.dim_v = dim_v
+        self.is_causal = is_causal
+        self.dtype = dtype
+        self.sm_scale = sm_scale
+        self.init_config(config)
+
+
+class MLAVarlenPrefillFwdKernel(_MLAVarlenFwdBase):
     """Packed-varlen MLA prefill: one query block of one head per CTA."""
 
     supported_archs: list[int] = [80, 89, 90]
@@ -288,72 +346,21 @@ class MLAVarlenPrefillFwdKernel(Kernel, MLAVarlenFwdInterface):
             )
         return super().refusal(call)
 
-    @classmethod
-    def entry_for(cls, call: MLAVarlenCall) -> Entry:
-        args = dict(
-            batch=call.batch,
-            heads=call.heads,
-            dim_nope=call.dim_nope,
-            dim_pe=call.dim_pe,
-            dim_v=call.dim_v,
-            is_causal=call.is_causal,
-            sm_scale=call.sm_scale,
-            dtype=call.dtype,
-            device_index=call.device_index,
-        )
-        return tuple(args.items()), lambda: cls(**args)
-
-    def __init__(
-        self,
-        batch: int,
-        heads: int,
-        dim_nope: int,
-        dim_pe: int,
-        dim_v: int,
-        is_causal: bool,
-        dtype: torch.dtype,
-        sm_scale: float | None = None,
-        config: dict | None = None,
-        *,
-        device_index: int | None = None,
-    ) -> None:
-        """Build the program factory for one call shape.
-
-        Args:
-            batch: Requests the packing carries, so the length of ``cu_seqlens`` less one.
-            heads: Query heads.
-            dim_nope: Width of the key's per-head half.
-            dim_pe: Width of the key's shared rope half.
-            dim_v: Width of a value row.
-            is_causal: Whether a query row reads only keys at or before its position.
-            dtype: Input and output dtype.
-            sm_scale: Score scale, or ``None`` for ``(dim_nope + dim_pe) ** -0.5``.
-            config: Tile sizes and pipeline depth, or ``None`` for the default.
-            device_index: CUDA device the program is built for.
-        """
-        super().__init__(device_index=device_index)
-        self.batch = batch
-        self.heads = heads
-        self.dim_nope = dim_nope
-        self.dim_pe = dim_pe
-        self.dim_v = dim_v
-        self.is_causal = is_causal
-        self.dtype = dtype
-        self.sm_scale = sm_scale
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
         self.kernel = _mla_varlen_fwd_kernel(
-            batch,
-            heads,
-            dim_nope,
-            dim_pe,
-            dim_v,
-            is_causal,
-            sm_scale,
+            self.batch,
+            self.heads,
+            self.dim_nope,
+            self.dim_pe,
+            self.dim_v,
+            self.is_causal,
+            self.sm_scale,
             self.dtype_str,
         )
-        self._supply_prog = self._make_supply_prog()
-        self.init_config(config)
 
-    def _make_supply_prog(self) -> Callable:
+    @property
+    def autotune_supply_prog(self) -> Callable:
         """Supply valid packed tensors and offsets while autotuning.
 
         Autotuning draws integer inputs at random otherwise, and a random
@@ -389,10 +396,6 @@ class MLAVarlenPrefillFwdKernel(Kernel, MLAVarlenFwdInterface):
 
         return supply_prog
 
-    @property
-    def autotune_supply_prog(self) -> Callable:
-        return self._supply_prog
-
     @staticmethod
     def _shared_bytes(
         batch: int, dim_nope: int, dim_pe: int, dim_v: int, itemsize: int, config: dict
@@ -410,8 +413,7 @@ class MLAVarlenPrefillFwdKernel(Kernel, MLAVarlenFwdInterface):
         ]
         if stages_score_tile(block_m, config["threads"]):
             buffers.append(block_m * block_n * itemsize)
-        align = SHARED_BUFFER_ALIGN_BYTES
-        return sum(-(-b // align) * align for b in buffers)
+        return _aligned_bytes(buffers)
 
     @property
     def default_config(self) -> dict:

@@ -14,6 +14,7 @@ from tileops._kernels.build_target import target_cache
 from tileops._kernels.constants import VECTOR_ACCESS_BYTES
 from tileops._kernels.norm.call_spec import LayerNormCall
 from tileops._kernels.norm.rms_norm import _RMSNormRowsKernel
+from tileops._kernels.streaming_load import cp_async16
 from tileops._kernels.warp_reduce import warp_reduce
 from tileops._utils import WARP_LANES
 
@@ -87,14 +88,12 @@ def _rms_norm_staged_kernel(M, N, eps, dtype, has_weight):
                 total = T.alloc_local((1,), "float32")
                 for g in T.unroll(_ROWS):
                     for k in T.unroll(steps):
-                        T.call_extern(
-                            "handle",
-                            "tileops::cp_async16",
-                            T.address_of(tile[g, (k * _THREADS + tx) * vec]),
-                            # A row past the last reads the last row and stores nothing.
-                            T.address_of(
-                                x[T.min(cta * _ROWS + g, M - 1), (k * _THREADS + tx) * vec]
-                            ),
+                        # A row past the last reads the last row and stores nothing.
+                        cp_async16(
+                            tile,
+                            (g, (k * _THREADS + tx) * vec),
+                            x,
+                            (T.min(cta * _ROWS + g, M - 1), (k * _THREADS + tx) * vec),
                         )
                     T.ptx_commit_group()
                 normalize(weight, y, tile, sums, piece, scale, total, tx, cta * _ROWS, 0, 1)

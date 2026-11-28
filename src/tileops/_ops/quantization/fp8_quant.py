@@ -4,7 +4,7 @@ from typing import ClassVar
 import torch
 
 from tileops._kernels.kernel_base import Kernel, KernelInterface
-from tileops._kernels.quantization.fp8_quant import (
+from tileops._kernels.quantization import (
     FP8QuantCall,
     FP8QuantFwdInterface,
     FP8QuantKernel,

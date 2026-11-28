@@ -11,7 +11,6 @@ import operator
 import tilelang
 import tilelang.language as T
 import torch
-from tvm import DataType
 
 from tileops._kernels.build_target import target_cache
 from tileops._kernels.constants import VECTOR_ACCESS_BYTES
@@ -32,7 +31,7 @@ __all__ = ["RMSNormStreamingKernel"]
 @target_cache(maxsize=32)
 def _rms_norm_streaming_kernel(M, N, eps, dtype, has_weight, ctas):
     # The widest access that divides the row, so every row starts on one.
-    vec = math.gcd(N, VECTOR_ACCESS_BYTES // (DataType(dtype).bits // 8))
+    vec = math.gcd(N, VECTOR_ACCESS_BYTES // getattr(torch, dtype).itemsize)
 
     @tilelang.jit(out_idx=[2])
     def build(threads, accesses):

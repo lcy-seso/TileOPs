@@ -89,7 +89,7 @@ def _gemm_fp8_1d2d_kernel(
 
     @tilelang.jit(
         out_idx=[-1],
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         # Not CUDA_COMPILE_FLAGS: its -DNDEBUG changes ptxas's register allocation and
         # schedule for the 64x16 tile.
         compile_flags=[
@@ -483,7 +483,7 @@ def _gemm_fp8_block128_wave_kernel(
 
     @tilelang.jit(
         out_idx=[-1],
-        pass_configs={"tl.disable_warp_specialized": True},
+        pass_configs={tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True},
         compile_flags=[*CUDA_COMPILE_FLAGS, "-DENABLE_BF16", *csrc_include("fp8_1d2d_helper.h")],
     )
     def _gemm_fp8_block128_wave_func(

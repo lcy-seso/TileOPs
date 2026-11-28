@@ -4,7 +4,11 @@ import tilelang
 import tilelang.language as T
 import torch
 
-from tileops._kernels.attention.call_spec import AttentionCall, GQADenseFwdInterface
+from tileops._kernels.attention.call_spec import (
+    AttentionCall,
+    GQADenseFwdInterface,
+    check_head_groups,
+)
 from tileops._kernels.attention.gqa.decode_bs1_common import (
     allocate_partials,
     balanced_split,
@@ -529,10 +533,7 @@ class GQADecodeKernel(Kernel, GQADenseFwdInterface):
         self._shared_memory_optin = self.build_target.smem_budget
         if fuse_rope and arch != 90:
             raise ValueError("fused RoPE decode requires SM90")
-        if self.groups <= 0:
-            raise ValueError("heads_kv must be positive")
-        if self.heads % self.groups != 0:
-            raise ValueError("heads must be divisible by heads_kv")
+        check_head_groups(self.heads, self.groups)
         reason = self._limit_refusal(dim, seq_len_kv, arch)
         if reason is not None:
             raise ValueError(f"{type(self).__name__} {reason}")

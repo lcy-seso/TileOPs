@@ -42,7 +42,8 @@ class NGramHashFwdOp(Op):
         Args:
             eos_token_id: Token used at missing history and EOS boundaries.
             validate_inputs: Check packed offsets and metadata bounds on the CPU.
-            target: Backend target, or None to select from the input device.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.eos_token_id = eos_token_id
         self.validate_inputs = validate_inputs

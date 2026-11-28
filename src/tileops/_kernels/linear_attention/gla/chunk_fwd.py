@@ -759,14 +759,10 @@ class GLAChunkFwdKernel(GLAChunkedFwdKernel, GLAChunkFwdInterface):
         walk_stage = 2 * (v + 1) * 4
         return max(update, output, walk_stage)
 
-    @classmethod
-    def _default_config_for(
-        cls, budget: int, chunk_size: int, dim_k: int, dim_v: int, elem: int
-    ) -> dict:
-        """One warp group for the chunk-parallel launches and the walk's prefetch depth.
-
-        Neither depends on *budget* or the extents: the walk takes fewer stages when building
-        on a device that cannot hold them.
+    @property
+    def default_config(self) -> dict:
+        """One warp group for the chunk-parallel launches and the walk's prefetch depth, on
+        every device and extent: the walk takes fewer stages where the device cannot hold them.
         """
         return {"threads": 128, "num_stages": 16}
 

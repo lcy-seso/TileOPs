@@ -22,7 +22,7 @@ from tileops._kernels.norm.call_spec import (
     RMSNormFwdInterface,
     whole_row_scale_refusal,
 )
-from tileops._kernels.streaming_load import load16
+from tileops._kernels.streaming_load import cp_async16, load16
 from tileops._kernels.warp_reduce import warp_reduce
 from tileops._utils import WARP_LANES
 
@@ -92,11 +92,11 @@ def _rms_norm_on_chip_kernel(M, N, eps, dtype, has_weight, cluster, held_vectors
 
                 if async_stage:
                     for v in T.unroll(staged_vectors):
-                        T.call_extern(
-                            "handle",
-                            "tileops::cp_async16",
-                            T.address_of(tile[0, (v * threads + tx) * vec]),
-                            T.address_of(x[cta, held + (v * threads + tx) * vec]),
+                        cp_async16(
+                            tile,
+                            (0, (v * threads + tx) * vec),
+                            x,
+                            (cta, held + (v * threads + tx) * vec),
                         )
                     T.ptx_commit_group()
                 for v in T.unroll(held_vectors):

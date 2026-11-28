@@ -11,7 +11,11 @@ import tilelang
 import tilelang.language as T
 import torch
 
-from tileops._kernels.attention.call_spec import AttentionCall, GQADenseFwdInterface
+from tileops._kernels.attention.call_spec import (
+    AttentionCall,
+    GQADenseFwdInterface,
+    check_head_groups,
+)
 from tileops._kernels.attention.gqa.decode import GQADecodeKernel
 from tileops._kernels.attention.gqa.decode_bs1_common import (
     COMPILE_FLAGS,
@@ -25,11 +29,6 @@ from tileops._kernels.constants import LOG2E
 from tileops._kernels.kernel_base import Entry, Kernel
 
 __all__ = ["GQADecodeWSKernel"]
-
-
-def _as_fp32(value: float) -> float:
-    """*value* as the kernel's FP32 arithmetic holds it."""
-    return float(torch.tensor(value, dtype=torch.float32))
 
 
 @target_cache(maxsize=32)
@@ -448,8 +447,11 @@ class GQADecodeWSKernel(Kernel, GQADenseFwdInterface):
             return "does not fuse RoPE"
         if call.dim not in cls._DIMS:
             return f"requires head dimension in {cls._DIMS}"
-        if call.sm_scale is not None and math.isinf(_as_fp32(abs(call.sm_scale) * LOG2E)):
-            return "requires a score scale whose base-2 form FP32 holds"
+        if call.sm_scale is not None:
+            # The kernel's FP32 arithmetic holds the scale's base-2 form.
+            log2_scale = float(torch.tensor(abs(call.sm_scale) * LOG2E, dtype=torch.float32))
+            if math.isinf(log2_scale):
+                return "requires a score scale whose base-2 form FP32 holds"
         return GQADecodeKernel._limit_refusal(call.dim, call.seqlen_kv, call.arch)
 
     @classmethod
@@ -482,8 +484,7 @@ class GQADecodeWSKernel(Kernel, GQADenseFwdInterface):
         super().__init__(device_index=device_index)
         # The program takes the cache length per call.
         del seq_len_kv
-        if heads_kv <= 0 or heads % heads_kv != 0:
-            raise ValueError("heads must be a positive multiple of heads_kv")
+        check_head_groups(heads, heads_kv)
         if dim not in self._DIMS:
             raise ValueError(f"{type(self).__name__} requires head dimension in {self._DIMS}")
         self.batch = batch

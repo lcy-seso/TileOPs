@@ -54,10 +54,9 @@ class TopKSelectFwdOp(Op):
         """Build the op. Shapes and dtype are taken from each call.
 
         Args:
-            top_k: Manifest ``params.top_k``, ``int``.
-            fill_value: Manifest ``params.fill_value``, ``int | None``: the index written to
-                the slots a window leaves unselected, such as ``-1``; ``None`` writes each
-                call's ``seq_len_kv``.
+            top_k: Keys selected per query row.
+            fill_value: The index written to the slots a window leaves unselected, such as
+                ``-1``; ``None`` writes each call's ``seq_len_kv``.
             target: Which set of kernels serves this op — a target name, ``BUILTIN``
                 for the in-tree kernels, or ``None`` to decide from the input device.
         """

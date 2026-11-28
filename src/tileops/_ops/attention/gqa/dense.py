@@ -29,7 +29,6 @@ from tileops._ops.attention.gqa.parameters import (
     score_softcap,
 )
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = ["GQADenseFwdOp", "GQADenseWithLSEFwdOp"]
@@ -43,6 +42,8 @@ class _GQADenseFwdOpBase(Op):
     ``sm_scale`` and ``softcap``; the class defaults below stand for the RoPE and FP8
     parameters an op without them leaves off.
     """
+
+    contraction_dtype_from = "q"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "gqa_dense_prefill": GQADensePrefillFwdKernel,
@@ -74,10 +75,6 @@ class _GQADenseFwdOpBase(Op):
         a masked key's infinite logit by zero or dividing by the cap."""
         # A double at most 2**-150 rounds to FP32 zero, ties going to the even zero.
         return self.sm_scale is not None and abs(self.sm_scale * LOG2E) <= 2.0**-150
-
-    def roof_key(self) -> str:
-        """Dense attention's contractions are priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])
 
     def _dense_call(self, inputs: tuple[torch.Tensor | None, ...]) -> AttentionCall:
         """State what one contiguous call is, for selection to filter against."""
@@ -188,12 +185,12 @@ class GQADenseFwdOp(_GQADenseFwdOpBase):
                 ``pos_encoding_mode="rope"``.
             rope_layout: ``"neox"`` (rotate split halves) or
                 ``"interleaved"`` (rotate adjacent pairs).
-            out_dtype: Manifest ``params.out_dtype``. An FP8 call cannot return FP8 and the two
+            out_dtype: Output dtype. An FP8 call cannot return FP8 and the two
                 16-bit types are equally valid, so ``float16`` or
                 ``bfloat16`` must be named here; a 16-bit call has nothing to
                 choose and accepts only ``None`` or its own input dtype.
-            target: Backend target to serve this op, or ``None`` to decide
-                from the input device.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
 
         Raises:
             ValueError: ``softcap`` is negative.
@@ -312,8 +309,8 @@ class GQADenseWithLSEFwdOp(_GQADenseFwdOpBase):
                 $\log_2 e$ rounds to zero in FP32 weighs every visible key equally.
             softcap: Positive cap $c$ replacing each raw score $z$ with $c \tanh(z / c)$.
                 ``None`` or ``0`` disables capping.
-            target: Backend target to serve this op, or ``None`` to decide from the input
-                device.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
 
         Raises:
             ValueError: ``softcap`` is negative.

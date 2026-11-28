@@ -11,7 +11,6 @@ from tileops._kernels.gemm.grouped import (
 )
 from tileops._kernels.kernel_base import Kernel, KernelInterface
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = ["GroupedGEMMFwdOp"]
@@ -35,6 +34,8 @@ class GroupedGEMMFwdOp(Op):
     them would synchronise: ``batch_sizes`` sums to the packed row count, and
     ``batch_offsets`` is its exclusive prefix sum.
     """
+
+    contraction_dtype_from = "T"
 
     # The SM90 template serves every layout whose extents TMA can address; the
     # general kernel takes what it refuses.
@@ -121,7 +122,3 @@ class GroupedGEMMFwdOp(Op):
                 device=a.device,
             ),
         )(*inputs)
-
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.indices["T"])

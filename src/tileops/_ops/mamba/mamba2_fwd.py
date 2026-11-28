@@ -22,7 +22,6 @@ from tileops._ops.mamba.ssd_chunk_scan import SSDChunkScanFwdOp
 from tileops._ops.mamba.ssd_chunk_state import SSDChunkStateFwdOp
 from tileops._ops.mamba.ssd_state_passing import SSDStatePassingFwdOp
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = ["Mamba2FwdOp"]
@@ -35,6 +34,8 @@ class Mamba2FwdOp(Op):
     into a single callable whose interface matches mamba_chunk_scan_combined from
     the official mamba_ssm library, except that ``final_states`` is always returned.
     """
+
+    contraction_dtype_from = "x"
 
     delegate_types: ClassVar[Mapping[str, type[Op]]] = {
         "ssd_chunk_cumsum_float16": SSDChunkCumsumFwdOp,
@@ -140,7 +141,3 @@ class Mamba2FwdOp(Op):
 
         y = self._chunk_scan_op(x, cb, dA_cumsum, C, prev_states, dt_out)  # (B, S, H, P) float32
         return y, final_states_flat.reshape(batch, n_heads, d_head, d_state)
-
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["x"][1])

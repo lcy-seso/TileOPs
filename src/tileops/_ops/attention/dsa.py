@@ -19,7 +19,6 @@ from tileops._kernels.attention.call_spec import (
 )
 from tileops._kernels.kernel_base import Kernel, KernelInterface
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = ["DSADenseFwdOp", "DSAPagedFwdOp"]
@@ -36,6 +35,8 @@ class DSADenseFwdOp(Op):
     Otherwise they serve causal calls without ``attn_sink``, with a power-of-two value
     dimension and a zero or power-of-two tail dimension, subject to shared-memory limits.
     """
+
+    contraction_dtype_from = "q"
 
     # On SM90 DSADecodeWSKernel serves value dim 512 and DSADecodeKernel the other widths it
     # covers; DSADecodeBasicKernel serves every other architecture. Selection reads the
@@ -138,10 +139,6 @@ class DSADenseFwdOp(Op):
         )
         return kernel(q, kv, indices, attn_sink)
 
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])
-
 
 class DSAPagedFwdOp(Op):
     """DeepSeek Sparse Attention (DSA) decode over a paged latent cache.
@@ -163,6 +160,8 @@ class DSAPagedFwdOp(Op):
     value columns and 0 or 64 more key columns, with any ``topk``, on SM90.
     """
 
+    contraction_dtype_from = "q"
+
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "dsa_paged_mma_kernel": DSAPagedMMAKernel,
         "dsa_paged_cluster_kernel": DSAPagedClusterKernel,
@@ -179,7 +178,7 @@ class DSAPagedFwdOp(Op):
             sm_scale: Scale of the query-key scores; ``None`` means ``q``'s width to the power
                 -0.5, 576 for the FP8 row.
             head_dim_v: The value width, the leading columns of the key; 512 for the FP8 row.
-            target: Which set of kernels serves this op -- a target name, ``BUILTIN``
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
                 for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.sm_scale = sm_scale
@@ -229,7 +228,3 @@ class DSAPagedFwdOp(Op):
                 device=q.device,
             ),
         )(q, kv_cache, block_table, cache_seqlens, indices, attn_sink)
-
-    def roof_key(self) -> str:
-        """FLOPs are bfloat16 matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])

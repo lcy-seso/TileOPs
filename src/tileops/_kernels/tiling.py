@@ -2,7 +2,7 @@
 
 import tilelang.language as T
 
-__all__ = ["ALIGNMENT", "align_up", "grouped_tile_id"]
+__all__ = ["ALIGNMENT", "align_up", "grouped_tile_id", "one_wave_divisor"]
 
 # Element count a row is padded to before ``T.copy`` moves it through shared
 # memory: 256 elements, i.e. 512 bytes for fp16/bf16 and 1024 for fp32.
@@ -14,6 +14,13 @@ def align_up(n: int, alignment: int) -> int:
     if alignment <= 0:
         raise ValueError(f"alignment must be positive, got {alignment}")
     return ((n + alignment - 1) // alignment) * alignment
+
+
+def one_wave_divisor(count: int, blocks: int, num_sms: int) -> int:
+    """The largest divisor of *count* whose units of *blocks* CTAs each fill at most one wave
+    of *num_sms* CTAs; 1 when even one unit fills more."""
+    fit = max(1, num_sms // max(1, blocks))
+    return max(d for d in range(1, min(fit, count) + 1) if count % d == 0)
 
 
 @T.macro

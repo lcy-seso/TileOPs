@@ -42,7 +42,8 @@ class MergeAttentionStatesFwdOp(Op):
 
         Args:
             lse_base: Logarithm base of the input and output LSE, ``"e"`` or ``"2"``.
-            target: Backend target, or None to resolve from the input device.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.lse_base = lse_base
         super().__init__(target=target)

@@ -96,6 +96,15 @@ def test_a_required_parameter_made_keyword_only_breaks_only_positional_calls():
     assert found == ["f: positional parameter `a` (slot 0) removed"]
 
 
+def test_an_op_member_that_falls_back_to_op_is_not_removed():
+    method = {"kind": "method", "params": [["self", "POSITIONAL_OR_KEYWORD", None]]}
+    old = {"m.XOp": {"kind": "class", "op": True}, "m.XOp.roof_key": method}
+    new = {"m.XOp": {"kind": "class", "op": True}, "tileops.authoring.Op.roof_key": method}
+    assert check_api_compat.breaks(old, new) == []
+    del new["tileops.authoring.Op.roof_key"]
+    assert check_api_compat.breaks(old, new) == ["m.XOp.roof_key: removed"]
+
+
 def test_a_dataclass_field_is_a_member():
     import dataclasses
 

@@ -21,7 +21,7 @@ from benchmarks.baselines import (
     vllm_op,
 )
 from benchmarks.timing import bench_device
-from tileops._utils import get_sm_version
+from tileops._utils import device_facts
 from tileops.attention import (
     GQADenseBwdOp,
     GQADenseFwdOp,
@@ -385,7 +385,7 @@ def _off_sm90() -> bool:
     """Whether the run device is a CUDA device other than SM90, where in-tree FP8 GQA does
     not run. Another device type's target decides for itself."""
     device = bench_device()
-    return device.type == "cuda" and get_sm_version(device.index) != 90
+    return device.type == "cuda" and device_facts(device.index).arch != 90
 
 
 @pytest.mark.parametrize("case", bench.cases(GQADenseFwdOp))

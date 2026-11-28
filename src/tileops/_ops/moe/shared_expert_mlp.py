@@ -12,8 +12,6 @@ from tileops._kernels.moe import (
     SharedExpertMLPKernel,
 )
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
-from tileops.backend import Target
 
 __all__ = ["SharedExpertMLPFwdOp"]
 
@@ -25,29 +23,14 @@ class SharedExpertMLPFwdOp(Op):
     the gated activation is rounded to the input dtype before the down projection.
     """
 
+    contraction_dtype_from = "D"
+
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "shared_expert_mlp": SharedExpertMLPKernel
     }
     interfaces: ClassVar[Mapping[str, type[KernelInterface]]] = {
         "shared_expert_mlp": SharedExpertMLPFwdInterface
     }
-
-    def __init__(
-        self,
-        *,
-        target: Target = None,
-    ) -> None:
-        """Build the op. Shapes and dtype are taken from each call.
-
-        Args:
-            target: Which set of kernels serves this op — a target name, ``BUILTIN``
-                for the in-tree kernels, or ``None`` to decide from the input device.
-        """
-        super().__init__(target=target)
-
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.indices["D"])
 
     def forward(
         self, hidden_states: torch.Tensor, w_gate_up: torch.Tensor, w_down: torch.Tensor

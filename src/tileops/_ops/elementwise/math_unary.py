@@ -140,7 +140,8 @@ class RoundFwdOp(UnaryOp):
         Args:
             decimals: Number of decimal places to round to (manifest
                 ``params.decimals``, default 0).
-            target: Which set of kernels serves this op.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.decimals = decimals
         super().__init__(target=target)

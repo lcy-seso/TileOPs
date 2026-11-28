@@ -12,7 +12,6 @@ from tileops._kernels.linear_attention import (
     GLAChunkFwdKernel,
 )
 from tileops._ops.op_base import Op
-from tileops._perf.profile import tensor_core_roof
 from tileops.backend import Target
 
 __all__ = ["GLAChunkBwdOp", "GLAChunkFwdOp"]
@@ -45,6 +44,8 @@ class GLAChunkFwdOp(Op):
     The read-only tensor inputs may be non-contiguous.
 
     """
+
+    contraction_dtype_from = "q"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {"gla_chunk_fwd": GLAChunkFwdKernel}
     interfaces: ClassVar[Mapping[str, type[KernelInterface]]] = {
@@ -100,10 +101,6 @@ class GLAChunkFwdOp(Op):
         )
         return kernel(q, k, v, g, initial_state)
 
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])
-
 
 class GLAChunkBwdOp(Op):
     """Gated Linear Attention (GLA) backward operator.
@@ -116,6 +113,8 @@ class GLAChunkBwdOp(Op):
     The read-only tensor inputs may be non-contiguous.
 
     """
+
+    contraction_dtype_from = "q"
 
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {"gla_chunk_bwd": GLAChunkBwdKernel}
     interfaces: ClassVar[Mapping[str, type[KernelInterface]]] = {
@@ -177,7 +176,3 @@ class GLAChunkBwdOp(Op):
             "gla_chunk_bwd", lambda: _chunk_call(self, q, v, self.has_initial_state)
         )
         return kernel(*inputs, self.has_initial_state)
-
-    def roof_key(self) -> str:
-        """FLOPs are matmul contractions; priced on tensor cores."""
-        return tensor_core_roof(self.last_call.tensors["q"][1])

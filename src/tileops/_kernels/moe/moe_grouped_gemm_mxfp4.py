@@ -1788,15 +1788,19 @@ class MoEGroupedGEMMMXFP4Kernel(GroupedGEMMConfigMixin, Kernel, MGroupedGEMMMXFP
         return cls.walk_refusal(call) or super().refusal(call)
 
     @classmethod
-    def walk_refusal(cls, call: MGroupedGEMMMXFP4Call) -> str | None:
-        """Experts whose task-walk state does not fit in shared memory beside the call's default
-        tile on the shallowest ring, its scales a stage at a time."""
+    def _least_smem(cls, call: MGroupedGEMMMXFP4Call) -> int:
+        """The shared memory of the call's default tile on the shallowest ring, its scales a
+        stage at a time."""
         scale_bytes = 1 if call.scale_dtype == torch.float8_e8m0fnu else 4
         block_m, block_n = cls.default_tile(call)
-        least = _smem_bytes(
+        return _smem_bytes(
             block_m, block_n, min(cls._NUM_STAGES), scale_bytes, call.k // QUANT_SCALE_BLOCK, False
         )
-        room = call.smem_budget - cls._SMEM_HEADROOM - least
+
+    @classmethod
+    def walk_refusal(cls, call: MGroupedGEMMMXFP4Call) -> str | None:
+        """Experts whose task-walk state does not fit in shared memory beside ``_least_smem``."""
+        room = call.smem_budget - cls._SMEM_HEADROOM - cls._least_smem(call)
         return walk_refusal(call.num_groups, call.packing, call.metadata_kind, room)
 
     @classmethod
@@ -1812,11 +1816,7 @@ class MoEGroupedGEMMMXFP4Kernel(GroupedGEMMConfigMixin, Kernel, MGroupedGEMMMXFP
         self.scale_bytes = 1 if call.scale_dtype == torch.float8_e8m0fnu else 4
         self.scale_k = call.k // QUANT_SCALE_BLOCK
         self.sm_count = self.build_target.sm_count
-        self.smem_limit = (
-            self.build_target.smem_budget
-            - self._SMEM_HEADROOM
-            - walk_smem_bytes(call.num_groups, call.packing, call.metadata_kind)
-        )
+        self.smem_limit = self._block_smem_limit()
         self.alignment = call.alignment if call.packing == "aligned" else 0
         self._prefill_tiles: dict[int, tuple[int, int, int] | None] = {}
         self.kernel = _moe_grouped_gemm_mxfp4_kernel(
@@ -1833,31 +1833,26 @@ class MoEGroupedGEMMMXFP4Kernel(GroupedGEMMConfigMixin, Kernel, MGroupedGEMMMXFP
         )
         self.init_config()
 
-    def _refusal_inputs(self) -> dict:
-        return {
-            "sm_count": self.sm_count,
-            "smem_limit": self.smem_limit,
-            "scale_bytes": self.scale_bytes,
-            "scale_k": self.scale_k,
-            "alignment": self.alignment,
-        }
+    def _block_smem_limit(self) -> int:
+        """The shared memory one block may take beside the call's task-walk state."""
+        call = self.call
+        walk = walk_smem_bytes(call.num_groups, call.packing, call.metadata_kind)
+        return self.build_target.smem_budget - self._SMEM_HEADROOM - walk
 
-    def _stages_for(self, block_m: int, block_n: int) -> list[int]:
-        """Ring depths that fit beside the tiles, those dividing the K steps when any do."""
-        fitting = [
-            s
-            for s in self._NUM_STAGES
-            if _config_smem(block_m, block_n, s, self.scale_bytes, self.scale_k, self.smem_limit)
-            <= self.smem_limit
-        ]
-        dividing = [s for s in fitting if self.scale_k % s == 0]
-        return dividing or fitting
+    def _refusal_inputs(self) -> dict:
+        return {**super()._refusal_inputs(), "scale_bytes": self.scale_bytes}
+
+    def _footprint(self, block_m: int, block_n: int) -> Callable[[int], int]:
+        """The shared memory of a ``block_m`` by ``block_n`` tile, by ring depth."""
+        return lambda stages: _config_smem(
+            block_m, block_n, stages, self.scale_bytes, self.scale_k, self.smem_limit
+        )
 
     @property
     def default_config(self) -> dict:
         # Four warp-groups take a 4-deep ring.
         block_m, block_n = self.default_tile(self.call)
-        stages = self._stages_for(block_m, block_n)
+        stages = self._stages_for(self._footprint(block_m, block_n))
         shallow = [s for s in stages if s <= 4]
         return {
             "block_m": block_m,
@@ -1896,14 +1891,10 @@ class MoEGroupedGEMMMXFP4Kernel(GroupedGEMMConfigMixin, Kernel, MGroupedGEMMMXFP
             {"block_m": m, "block_n": n, "num_stages": s, "num_sms": sms}
             for m in heights
             for n in widths
-            for s in self._stages_for(m, n)
+            for s in self._stages_for(self._footprint(m, n))
             for sms in sorted({self._balanced_sms(m, n), self.sm_count})
         ]
-        return [
-            config
-            for config in configs
-            if self.config_refusal(config, **self._refusal_inputs()) is None
-        ]
+        return self._legal(configs)
 
     def _tuning_operands(self, rows: tuple, device) -> list:
         return mxfp4_tuning_operands(self.call, self.scale_k, rows, device)
@@ -2068,31 +2059,25 @@ class MoEGroupedGEMMMXFP4SharedDecodeKernel(MoEGroupedGEMMMXFP4Kernel):
         scale_k = call.k // QUANT_SCALE_BLOCK
         if call.k % QUANT_SCALE_BLOCK or not _table_box(scale_k):
             return f"loads code tables by TMA, which needs K a multiple of 2048, got K = {call.k}"
-        least = _shared_decode_smem_bytes(cls._TILE_COLUMNS, min(cls._NUM_STAGES), scale_k)
+        least = cls._least_smem(call)
         room = call.smem_budget - cls._SMEM_HEADROOM
         if least > room:
             return f"takes {least} bytes of shared memory on the shallowest ring, past {room}"
         return super().refusal(call)
 
     @classmethod
-    def walk_refusal(cls, call: MGroupedGEMMMXFP4Call) -> str | None:
-        """Experts whose task-walk state does not fit in shared memory beside the decode tile on
-        the shallowest ring."""
-        scale_k = call.k // QUANT_SCALE_BLOCK
-        least = _shared_decode_smem_bytes(cls._TILE_COLUMNS, min(cls._NUM_STAGES), scale_k)
-        room = call.smem_budget - cls._SMEM_HEADROOM - least
-        return walk_refusal(call.num_groups, call.packing, call.metadata_kind, room)
+    def _least_smem(cls, call: MGroupedGEMMMXFP4Call) -> int:
+        """The shared memory of the decode tile on the shallowest ring."""
+        return _shared_decode_smem_bytes(
+            cls._TILE_COLUMNS, min(cls._NUM_STAGES), call.k // QUANT_SCALE_BLOCK
+        )
 
     def __init__(self, call: MGroupedGEMMMXFP4Call) -> None:
         Kernel.__init__(self, device_index=call.device_index)
         self.call = call
         self.scale_k = call.k // QUANT_SCALE_BLOCK
         self.sm_count = self.build_target.sm_count
-        self.smem_limit = (
-            self.build_target.smem_budget
-            - self._SMEM_HEADROOM
-            - walk_smem_bytes(call.num_groups, call.packing, call.metadata_kind)
-        )
+        self.smem_limit = self._block_smem_limit()
         self.alignment = call.alignment
         self.kernel = _moe_grouped_gemm_mxfp4_shared_decode_kernel(
             call.num_groups,
@@ -2106,12 +2091,8 @@ class MoEGroupedGEMMMXFP4SharedDecodeKernel(MoEGroupedGEMMMXFP4Kernel):
         self.init_config()
 
     def _refusal_inputs(self) -> dict:
-        return {
-            "sm_count": self.sm_count,
-            "smem_limit": self.smem_limit,
-            "scale_k": self.scale_k,
-            "alignment": self.alignment,
-        }
+        # The decode program's footprint does not read the scale width.
+        return GroupedGEMMConfigMixin._refusal_inputs(self)
 
     @property
     def autotune_configs(self) -> list[dict]:
@@ -2126,11 +2107,7 @@ class MoEGroupedGEMMMXFP4SharedDecodeKernel(MoEGroupedGEMMMXFP4Kernel):
             }
             for stages in self._NUM_STAGES
         ]
-        return [
-            config
-            for config in configs
-            if self.config_refusal(config, **self._refusal_inputs()) is None
-        ]
+        return self._legal(configs)
 
     @property
     def default_config(self) -> dict:

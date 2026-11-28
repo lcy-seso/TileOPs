@@ -21,10 +21,11 @@ from tileops._kernels.attention.call_spec import (
     MLADenseBwdInterface,
     MLAVarlenBwdInterface,
 )
-from tileops._kernels.attention.mla.bwd import _delta_kernel, packed_dense_call
+from tileops._kernels.attention.mla.bwd import _delta_kernel, _MLABwdBase, packed_dense_call
 from tileops._kernels.build_target import CUDA_COMPILE_FLAGS, target_cache
 from tileops._kernels.constants import LOG2E
-from tileops._kernels.kernel_base import CompiledProgram, Entry, Kernel
+from tileops._kernels.kernel_base import CompiledProgram
+from tileops._kernels.tiling import one_wave_divisor
 
 __all__ = ["MLADenseBwdWSKernel", "MLAVarlenBwdWSKernel"]
 
@@ -620,7 +621,7 @@ def _bwd_ws_kernel(
     return _bwd_ws_func()
 
 
-class _MLABwdWSKernelBase(Kernel):
+class _MLABwdWSKernelBase(_MLABwdBase):
     """The three launches of one backward call over packed tensors."""
 
     supported_archs: list[int] = [90]
@@ -639,53 +640,10 @@ class _MLABwdWSKernelBase(Kernel):
             return f"ranks at most 256 requests per call, got {call.batch}"
         return super().refusal(call)
 
-    @classmethod
-    def entry_for(cls, call: MLABwdCall) -> Entry:
-        args = dict(
-            batch=call.batch,
-            heads=call.heads,
-            dim_qk=call.dim_qk,
-            dim_v=call.dim_v,
-            seqlen_q=call.seqlen_q,
-            seqlen_kv=call.seqlen_kv,
-            is_causal=call.is_causal,
-            sm_scale=call.sm_scale,
-            dtype=call.dtype,
-            device_index=call.device_index,
-        )
-        return tuple(args.items()), lambda: cls(**args)
-
-    def __init__(
-        self,
-        batch: int,
-        heads: int,
-        dim_qk: int,
-        dim_v: int,
-        seqlen_q: int,
-        seqlen_kv: int,
-        is_causal: bool,
-        dtype: torch.dtype,
-        sm_scale: float | None = None,
-        config: dict | None = None,
-        *,
-        device_index: int | None = None,
-    ) -> None:
-        super().__init__(device_index=device_index)
-        self.batch, self.heads = batch, heads
-        self.dim_qk, self.dim_v = dim_qk, dim_v
-        self.seqlen_q, self.seqlen_kv = seqlen_q, seqlen_kv
-        self.is_causal = is_causal
-        self.dtype = dtype
-        self.scale = dim_qk**-0.5 if sm_scale is None else sm_scale
-        self.num_sms = self.build_target.sm_count
-        self.device = torch.device("cuda", device_index) if device_index is not None else None
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
         # [next tile, CTAs retired]; the kernel returns both to zero.
-        self.sched = torch.zeros(2, dtype=torch.int32, device=self.device or "cuda")
-        self.init_config(config)
-
-    @property
-    def default_config(self) -> dict:
-        return {}
+        self.sched = torch.zeros(2, dtype=torch.int32, device=self._build_device)
 
     # Fixed by mla_bwd_wgmma.h, not tunable: its WGMMAs are m64 n48, two consumer
     # warpgroups of 48 keys make the 96-key tile, and its dQ register order gives
@@ -699,12 +657,11 @@ class _MLABwdWSKernelBase(Kernel):
             kv_blocks = -(-self.seqlen_kv // block_n)
         else:
             kv_blocks = -(-k.shape[0] // (block_n * self.batch))
-        # Heads interleaved per group: the largest divisor of heads whose key blocks of one
-        # request fill at most one wave of CTAs.
-        fit = max(1, self.num_sms // max(1, kv_blocks))
-        group = max(g for g in range(1, min(fit, self.heads) + 1) if self.heads % g == 0)
+        # Heads interleaved per group.
+        num_sms = self.build_target.sm_count
+        group = one_wave_divisor(self.heads, kv_blocks, num_sms)
         tiles_bound = self.heads * (k.shape[0] // block_n + self.batch)
-        num_ctas = min(self.num_sms, tiles_bound)
+        num_ctas = min(num_sms, tiles_bound)
         prep, main, land = self.program(self._compile, dense_seqlen, num_ctas, group)
         delta = prep(o, do)
         q_tiles = total_q // block_m + self.batch

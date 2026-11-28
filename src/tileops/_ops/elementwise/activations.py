@@ -76,7 +76,8 @@ class GELUFwdOp(UnaryOp):
         Args:
             approximate: ``'none'`` (default) evaluates the erf form; ``'tanh'`` the
                 tanh approximation ``0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))``.
-            target: Which set of kernels serves this op.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.approximate = approximate
         super().__init__(target=target)
@@ -153,7 +154,8 @@ class LeakyReLUFwdOp(_UnaryActivationMixin, UnaryOp):
         Args:
             negative_slope: Slope for negative inputs (default 0.01).
             inplace: When True, write the result into ``input`` and return ``input``.
-            target: Which set of kernels serves this op.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.negative_slope = negative_slope
         self.inplace = inplace
@@ -186,7 +188,8 @@ class ELUFwdOp(_UnaryActivationMixin, UnaryOp):
         Args:
             alpha: Scale for the negative part (default 1.0).
             inplace: When True, write the result into ``input`` and return ``input``.
-            target: Which set of kernels serves this op.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.alpha = alpha
         self.inplace = inplace
@@ -220,7 +223,8 @@ class HardtanhFwdOp(_UnaryActivationMixin, UnaryOp):
             min_val: Lower bound (default -1.0).
             max_val: Upper bound (default 1.0).
             inplace: When True, write the result into ``input`` and return ``input``.
-            target: Which set of kernels serves this op.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.min_val = min_val
         self.max_val = max_val
@@ -255,7 +259,8 @@ class SoftplusFwdOp(UnaryOp):
         Args:
             beta: Scaling factor (default 1.0).
             threshold: Linear regime threshold (default 20.0).
-            target: Which set of kernels serves this op.
+            target: Which set of kernels serves this op — a target name, ``BUILTIN``
+                for the in-tree kernels, or ``None`` to decide from the input device.
         """
         self.beta = beta
         self.threshold = threshold

@@ -22,6 +22,7 @@ from tileops._kernels.build_target import target_cache
 from tileops._kernels.constants import LOG2E, VECTOR_ACCESS_BYTES
 from tileops._kernels.kernel_base import Entry, Kernel
 from tileops._kernels.norm.call_spec import RMSNormGatedCall, RMSNormGatedFwdInterface
+from tileops._kernels.tiling import align_up
 from tileops._kernels.warp_reduce import warp_reduce
 from tileops._utils import WARP_LANES
 
@@ -43,7 +44,7 @@ def _rms_norm_gated_kernel(
     groups = n // group
     # An access moves the widest of 16 bytes of x, or of a halving of it, that divides the
     # group.
-    itemsize = torch.empty((), dtype=getattr(torch, dtype)).element_size()
+    itemsize = getattr(torch, dtype).itemsize
     vec = math.gcd(group, VECTOR_ACCESS_BYTES // itemsize)
     accesses = group // vec
     # A lane makes two accesses where the group has two, so it has two loads of each tensor
@@ -69,7 +70,7 @@ def _rms_norm_gated_kernel(
         # int64: a signature-valid call may hold 2^31 rows or more.
         rows = T.dynamic("rows", "int64")
         # A CTA holds whole groups: the threads round up to a multiple of the group's lanes.
-        threads = -(-max(threads, lanes) // lanes) * lanes
+        threads = align_up(max(threads, lanes), lanes)
         per_cta = threads // lanes
         # At most 64 registers a thread, so an SM keeps CTAs for half its threads and their
         # loads in flight; unbounded, the compiler spends more and the SM holds fewer CTAs.

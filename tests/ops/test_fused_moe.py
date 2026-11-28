@@ -8,7 +8,7 @@ from tileops._ops.moe import (
     FusedMoEFwdOp,
     FusedTopKFwdOp,
 )
-from tileops._utils import get_shared_memory_optin
+from tileops._utils import device_facts
 from workloads.device import run_device
 from workloads.moe import FusedMoEWorkload, moe_verification
 from workloads.numerics import compare_outputs
@@ -141,7 +141,7 @@ def test_fused_moe_qwen3(
         _vllm_runs_on(hidden.device)
         and hidden.is_cuda
         and scoring_func == "softmax"
-        and get_shared_memory_optin(hidden.device.index) >= 128 * 1024
+        and device_facts(hidden.device.index).smem_budget >= 128 * 1024
     ):
         topk_weights, topk_ids = FusedTopKFwdOp(top_k, scoring_func, renormalize)(gating)
         out_vllm = _vllm_fused_experts(

@@ -9,7 +9,6 @@ from collections.abc import Callable
 import tilelang
 import tilelang.language as T
 import torch
-from tvm import DataType
 
 from tileops._kernels.attention.call_spec import (
     PagedKVCacheWriteCall,
@@ -37,13 +36,13 @@ def _paged_cache_write_kernel(
     quantized = cache_dtype == "float8_e4m3fn"
     # A thread loads one 16-byte vector of an input row, or the widest smaller power of
     # two that divides the row, so no vector straddles two rows.
-    in_bytes = DataType(in_dtype).bits // 8
+    in_bytes = getattr(torch, in_dtype).itemsize
     vec = math.gcd(row_width, VECTOR_ACCESS_BYTES // in_bytes, k_stride, v_stride)
     lanes = row_width // vec
     # A vector of 4, 8 or 16 bytes moves through PTX vector loads and predicated stores;
     # a narrower one keeps element loads and a branched store.
     loaded_bytes = vec * in_bytes
-    stored_bytes = vec * DataType(cache_dtype).bits // 8
+    stored_bytes = vec * getattr(torch, cache_dtype).itemsize
 
     @tilelang.jit(
         out_idx=[],

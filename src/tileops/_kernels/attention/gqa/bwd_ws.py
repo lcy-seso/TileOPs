@@ -10,9 +10,11 @@ from tileops._kernels.attention.call_spec import (
     AttentionCall,
     GQABwdInterface,
 )
+from tileops._kernels.attention.gqa.bwd import _GQABwdBase
 from tileops._kernels.build_target import CUDA_COMPILE_FLAGS, target_cache
 from tileops._kernels.constants import LOG2E
-from tileops._kernels.kernel_base import CompiledProgram, Entry, Kernel
+from tileops._kernels.kernel_base import CompiledProgram
+from tileops._kernels.tiling import one_wave_divisor
 
 __all__ = ["GQABwdWSKernel"]
 
@@ -662,7 +664,7 @@ def _gqa_bwd_ws_post_kernel(
     return _gqa_bwd_ws_post_func
 
 
-class GQABwdWSKernel(Kernel, GQABwdInterface):
+class GQABwdWSKernel(_GQABwdBase, GQABwdInterface):
     """Warp-specialized causal or full GQA/MHA backward for head dim 128 on SM90.
 
     The backward starts as a programmatic dependent of the preprocess and waits for it only
@@ -704,60 +706,24 @@ class GQABwdWSKernel(Kernel, GQABwdInterface):
             return "does not serve a sliding window"
         return super().refusal(call)
 
-    @classmethod
-    def entry_for(cls, call: AttentionCall) -> Entry:
-        index = call.device_index
-        args = (
-            call.batch,
-            call.heads,
-            call.heads_kv,
-            call.max_seqlen_q,
-            call.dim,
-            call.is_causal,
-            call.dtype,
-            call.sm_scale,
-        )
-        return (*args, index), lambda: cls(*args, device_index=index)
-
-    def __init__(
-        self,
-        batch: int,
-        heads: int,
-        heads_kv: int,
-        seq_len: int,
-        dim: int,
-        is_causal: bool,
-        dtype: torch.dtype,
-        sm_scale: float | None = None,
-        config: dict | None = None,
-        device_index: int | None = None,
-    ) -> None:
-        super().__init__(device_index=device_index)
-        self.batch = batch
-        self.heads = heads
-        self.heads_kv = heads_kv
-        self.seq_len = seq_len
-        self.dim = dim
-        self.is_causal = is_causal
-        self.dtype = dtype
-
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        batch, heads, heads_kv, seq_len = self.batch, self.heads, self.heads_kv, self.seq_len
         num_sms = self.build_target.sm_count
         kv_blocks = seq_len // self._BLOCK_M
         self.heads_per_tile = self._heads_per_tile(
-            batch, heads, heads_kv, kv_blocks, is_causal, num_sms
+            batch, heads, heads_kv, kv_blocks, self.is_causal, num_sms
         )
         units = batch * heads // self.heads_per_tile
-        # Chunks launched together: the largest divisor of the chunk count whose key blocks
-        # fit in one wave of ``num_sms`` CTAs.
-        fit = max(1, num_sms // kv_blocks)
-        fill = max(f for f in range(1, min(fit, units) + 1) if units % f == 0)
+        # Chunks launched together.
+        fill = one_wave_divisor(units, kv_blocks, num_sms)
         self.kernel = _gqa_bwd_ws_kernel(
             batch,
             heads,
             heads_kv,
             seq_len,
-            dim,
-            is_causal,
+            self.dim,
+            self.is_causal,
             self.heads_per_tile,
             fill,
             num_sms,
@@ -765,7 +731,7 @@ class GQABwdWSKernel(Kernel, GQABwdInterface):
             self._BLOCK_N,
             self._DQ_ROW,
             self.dtype_str,
-            sm_scale,
+            self.sm_scale,
         )
         device = self._build_device
         # [next tile, CTAs retired, dQ accumulator parity, landing CTAs retired]. The
@@ -775,7 +741,7 @@ class GQABwdWSKernel(Kernel, GQABwdInterface):
         # The f32 dK/dV partials of each key block and the count of chunks landed in each;
         # the last chunk to land returns both to zero.
         kv_tiles = batch * heads_kv * kv_blocks
-        dq_rows = self._BLOCK_N * dim // 2 // self._DQ_ROW
+        dq_rows = self._BLOCK_N * self.dim // 2 // self._DQ_ROW
         grouped = self.heads_per_tile < heads // heads_kv
         self.dkv_acc = torch.zeros(
             (kv_tiles * 2, 2, 2, dq_rows, self._DQ_ROW) if grouped else (1,),
@@ -792,7 +758,6 @@ class GQABwdWSKernel(Kernel, GQABwdInterface):
         )
         self.head_cnt = torch.zeros(batch * heads, dtype=torch.int32, device=device)
         self.conv_cnt = torch.zeros(batch * heads, dtype=torch.int32, device=device)
-        self.init_config(config)
         self.program(self._compile)
 
     def _compile(self, cfg: dict) -> tuple[CompiledProgram, CompiledProgram]:
